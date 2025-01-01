@@ -1,0 +1,14 @@
+..env
+.env
+./env**
+./env
+./.env
+./.env.local
+./.env.development
+./.env.test
+./.env.production
+
+.DS_Store
+.reddit_analysis.db
+./reddit_analysis.db
+./fresh_env
