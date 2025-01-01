@@ -1,14 +1,14 @@
-..env
 .env
-./env**
-./env
-./.env
-./.env.local
-./.env.development
-./.env.test
-./.env.production
+env/
+**/env/
+fresh_env/
+.env.local
+.env.development
+.env.test
+.env.production
 
+# System files
 .DS_Store
-.reddit_analysis.db
-./reddit_analysis.db
-./fresh_env
+
+# Database files
+reddit_analysis.db"
