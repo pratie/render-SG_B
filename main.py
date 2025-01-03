@@ -73,7 +73,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","https://vercel-f-by6q.vercel.app"],  # Add your frontend URL
+    allow_origins=["http://localhost:3000","https://vercel-f-tau.vercel.app"],  # Add your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
