@@ -69,7 +69,7 @@ async def create_checkout_session(
                 'price_data': {
                     'currency': 'usd',
                     'product': STRIPE_PRODUCT_ID,
-                    'unit_amount': 4900,  # $49.00
+                    'unit_amount': 100,  # $49.00
                 },
                 'quantity': 1,
             }],
