@@ -38,81 +38,74 @@ if TELEGRAM_CHAT_ID:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'reddit_analysis.db')
 
-async def send_telegram_alert():
-    """Send alert to Telegram channel."""
+async def get_stats():
+    """Get statistics from database."""
     try:
-        # Verify credentials
-        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            logger.error("Missing Telegram credentials")
-            return
-
-        # Test Telegram bot token
-        test_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getMe"
-        logger.info("Testing bot token...")
-        test_response = requests.get(test_url)
-        logger.info(f"Test response: {test_response.text}")
-        if test_response.status_code != 200:
-            logger.error(f"Bot token test failed: {test_response.text}")
-            return
-        logger.info("Bot token test successful")
-
-        # Send test message first
-        test_message = "🔄 Bot Test: Successfully connected!"
-        test_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        test_payload = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': test_message
-        }
-        test_send = requests.post(test_url, json=test_payload)
-        if test_send.status_code != 200:
-            logger.error(f"Test message failed: {test_send.text}")
-            return
-        logger.info("Test message sent successfully")
-
-        # Ensure database path exists
-        logger.info(f"Using database at: {DB_PATH}")
         if not os.path.exists(DB_PATH):
             logger.error(f"Database file not found at: {DB_PATH}")
-            return
+            return None
 
-        # Connect to database
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         try:
-            # Get new users and mentions
+            # Get new users with their emails
             cursor.execute("""
-                SELECT COUNT(*) FROM users 
+                SELECT email FROM users 
                 WHERE created_at > datetime('now', '-30 minute')
+                ORDER BY created_at DESC
             """)
-            new_users = cursor.fetchone()[0]
+            new_user_emails = cursor.fetchall()
             
-            cursor.execute("""
-                SELECT COUNT(*) FROM reddit_mentions 
-                WHERE created_at > datetime('now', '-30 minute')
-            """)
-            new_mentions = cursor.fetchone()[0]
-
+            # Get basic stats
             cursor.execute("SELECT COUNT(*) FROM users")
             total_users = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM users WHERE has_paid = 1")
             paid_users = cursor.fetchone()[0]
-        except sqlite3.Error as e:
-            logger.error(f"SQL query error: {str(e)}")
-            return
-        
-        # Format message
-        message = f"""🔔 Database Update ({datetime.now().strftime('%H:%M')})
+
+            # Get latest paid users with emails
+            cursor.execute("""
+                SELECT email, payment_date 
+                FROM users 
+                WHERE has_paid = 1 
+                ORDER BY payment_date DESC 
+                LIMIT 5
+            """)
+            recent_paid_users = cursor.fetchall()
+
+            # Format message
+            message = f"""🔔 Database Update ({datetime.now().strftime('%H:%M')})
 
 📊 Last 30 Minutes:
-- New Users: {new_users}
-- New Mentions: {new_mentions}
+- New Users: {len(new_user_emails)}
+  {chr(10).join(f"  • {email[0]}" for email in new_user_emails) if new_user_emails else "  • No new users"}
 
 👥 Overall Stats:
 - Total Users: {total_users}
 - Paid Users: {paid_users}
+
+💰 Recent Paid Users:
+{chr(10).join(f"  • {email} (paid on {payment_date})" for email, payment_date in recent_paid_users) if recent_paid_users else "  • No recent paid users"}
 """
-        
+            return message
+
+        except sqlite3.Error as e:
+            logger.error(f"SQL query error: {str(e)}")
+            return None
+        finally:
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Error getting stats: {str(e)}")
+        return None
+
+async def send_telegram_message(message: str):
+    """Send message to Telegram."""
+    try:
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            logger.error("Missing Telegram credentials")
+            return
+
         # Telegram API URL
         telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         
@@ -123,29 +116,31 @@ async def send_telegram_alert():
         }
         
         logger.info("Sending message to Telegram...")
-        logger.info(f"Using chat ID: {TELEGRAM_CHAT_ID}")
         response = requests.post(telegram_url, json=payload)
         
         if response.status_code == 200:
             logger.info("Telegram alert sent successfully")
         else:
             logger.error(f"Failed to send Telegram alert. Status code: {response.status_code}")
-            logger.error(f"Response: {response.text}")
 
-    except sqlite3.Error as e:
-        logger.error(f"Database error: {str(e)}")
-    except requests.RequestException as e:
-        logger.error(f"Telegram API error: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-    finally:
-        if 'conn' in locals():
-            conn.close()
+        logger.error(f"Error sending Telegram message: {str(e)}")
+
+async def send_alerts():
+    """Send alerts to Telegram."""
+    try:
+        # Get stats message
+        stats = await get_stats()
+        if stats:
+            # Send to Telegram
+            await send_telegram_message(stats)
+    except Exception as e:
+        logger.error(f"Error in send_alerts: {str(e)}")
 
 def job():
-    asyncio.run(send_telegram_alert())
+    asyncio.run(send_alerts())
 
 if __name__ == "__main__":
-    print("Starting Telegram alert service...")
+    print("Starting alert service...")
     # Run the job once when script is executed
     job()
