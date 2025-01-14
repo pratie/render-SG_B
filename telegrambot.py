@@ -6,8 +6,6 @@ from dotenv import load_dotenv
 import logging
 from pathlib import Path
 from datetime import datetime
-import schedule
-import time
 
 # Load environment variables
 load_dotenv()
@@ -149,12 +147,5 @@ def job():
 
 if __name__ == "__main__":
     print("Starting Telegram alert service...")
-    # Run first alert immediately
+    # Run the job once when script is executed
     job()
-    
-    # Schedule future alerts
-    schedule.every(30).minutes.do(job)
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
