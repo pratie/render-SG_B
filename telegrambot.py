@@ -26,8 +26,8 @@ ENV = os.getenv("ENV", "development")
 
 # Set database path based on environment
 if ENV == "production":
-    PRIMARY_DB_PATH = Path("/data/reddit_analysis.db")
-    FALLBACK_DB_PATH = Path("/opt/render/project/data/reddit_analysis.db")
+    PRIMARY_DB_PATH = Path("/var/data/reddit_analysis.db")  # Match the web service path
+    FALLBACK_DB_PATH = Path("/opt/render/project/src/reddit_analysis.db") 
     
     # Check which path to use
     if PRIMARY_DB_PATH.exists() and os.access(str(PRIMARY_DB_PATH), os.R_OK):
