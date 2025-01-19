@@ -69,6 +69,11 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # Create Base class for declarative models
 Base = declarative_base()
 
+def init_db():
+    """Initialize the database tables."""
+    from models import Base  # Import here to avoid circular imports
+    Base.metadata.create_all(bind=engine)
+
 # Dependency to get database session
 def get_db():
     db = SessionLocal()

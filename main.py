@@ -25,7 +25,7 @@ from rate_limiter import limiter, rate_limit_exceeded_handler, get_analysis_rate
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from database import get_db
+from database import get_db, init_db
 from crud import UserCRUD, BrandCRUD, RedditMentionCRUD
 from models import (
     User, Brand, RedditMention, UserBase, UserCreate, UserResponse,
@@ -78,6 +78,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    logging.info("Database initialized")
 
 @app.get(
     "/projects/", 
