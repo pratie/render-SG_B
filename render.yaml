@@ -5,23 +5,24 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Ensure data directory exists and is writable
-      mkdir -p /data
-      chmod 777 /data
-      # Initialize database in persistent storage
-      export ENV=production
-      export DATABASE_URL="sqlite:////data/reddit_analysis.db"
-      # Run migrations
-      PYTHONPATH=/opt/render/project/src alembic upgrade head
+      # Run migrations after disk is mounted in startCommand
+      PYTHONPATH=/opt/render/project/src
     startCommand: |
       export ENV=production
-      export DATABASE_URL="sqlite:////data/reddit_analysis.db"
+      export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
+      
+      # Ensure database directory exists and is writable
+      mkdir -p /var/data
+      chmod 777 /var/data
+      
+      # Run migrations if needed
+      PYTHONPATH=/opt/render/project/src alembic upgrade head
       
       # Debug info
       echo "=== Database Configuration ==="
       echo "Environment: $ENV"
-      echo "Database Path: /data/reddit_analysis.db"
-      ls -la /data/
+      echo "Database Path: /var/data/reddit_analysis.db"
+      ls -la /var/data/
       echo "==========================="
       
       # Start the application
@@ -35,5 +36,5 @@ services:
         value: 3.11.0
     disk:
       name: sqlite-data
-      mountPath: /data
+      mountPath: /var/data
       sizeGB: 1

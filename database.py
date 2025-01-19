@@ -12,29 +12,34 @@ import sys
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get environment (development or production)
+# Get environment variables
 ENV = os.getenv("ENV", "development")
+IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
 # Use DATABASE_URL if provided, otherwise construct based on environment
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    if ENV == "production":
-        DB_PATH = Path("/data/reddit_analysis.db")
-        DATABASE_URL = "sqlite:////data/reddit_analysis.db"
+    if ENV == "production" or IS_RENDER:
+        DB_PATH = Path("/var/data/reddit_analysis.db")
+        DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
+        logger.info("Using production database on Render")
     else:
         DB_PATH = Path("./reddit_analysis.db")
         DATABASE_URL = "sqlite:///./reddit_analysis.db"
+        logger.info("Using local development database")
     
     # Ensure database directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 print("\n=== Database Configuration ===")
 print(f"Environment: {ENV}")
+print(f"Running on Render: {IS_RENDER}")
 print(f"Database URL: {DATABASE_URL}")
 print("===========================\n")
 
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
+logger.info(f"Running on Render: {IS_RENDER}")
 
 def check_file_permissions(path):
     """Check and log file and directory permissions."""
@@ -71,8 +76,8 @@ def wait_for_db():
             
             # Check file permissions if in production
             if ENV == "production":
-                if Path("/data/reddit_analysis.db").exists():
-                    check_file_permissions(Path("/data/reddit_analysis.db"))
+                if Path("/var/data/reddit_analysis.db").exists():
+                    check_file_permissions(Path("/var/data/reddit_analysis.db"))
         
         time.sleep(retry_interval)
     
