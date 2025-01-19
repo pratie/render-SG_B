@@ -5,23 +5,24 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Initialize database in project directory
-      touch ./reddit_analysis_prod.db
-      chmod 777 ./reddit_analysis_prod.db
-      # Run migrations on the production database
-      export DATABASE_URL="sqlite:///./reddit_analysis_prod.db"
+      # Ensure data directory exists and is writable
+      mkdir -p /data
+      chmod 777 /data
+      # Initialize database in persistent storage
       export ENV=production
+      export DATABASE_URL="sqlite:////data/reddit_analysis.db"
+      # Run migrations
       PYTHONPATH=/opt/render/project/src alembic upgrade head
     startCommand: |
-      # Set database URL for production
-      export DATABASE_URL="sqlite:///./reddit_analysis_prod.db"
       export ENV=production
+      export DATABASE_URL="sqlite:////data/reddit_analysis.db"
       
       # Debug info
-      echo "Database Configuration:"
-      echo "DATABASE_URL=$DATABASE_URL"
-      echo "ENV=$ENV"
-      ls -la ./reddit_analysis_prod.db
+      echo "=== Database Configuration ==="
+      echo "Environment: $ENV"
+      echo "Database Path: /data/reddit_analysis.db"
+      ls -la /data/
+      echo "==========================="
       
       # Start the application
       exec uvicorn main:app --host 0.0.0.0 --port $PORT
@@ -32,5 +33,7 @@ services:
         value: true
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: DATABASE_URL
-        value: sqlite:///./reddit_analysis_prod.db
+    disk:
+      name: sqlite-data
+      mountPath: /data
+      sizeGB: 1

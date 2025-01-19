@@ -15,35 +15,23 @@ logger = logging.getLogger(__name__)
 # Get environment (development or production)
 ENV = os.getenv("ENV", "development")
 
-# Configure SQLite for different environments
-if ENV == "production":
-    # Use DATABASE_URL from environment if set
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    if DATABASE_URL:
-        print("\n=== Database Configuration ===")
-        print(f"Environment: Production")
-        print(f"Database URL: {DATABASE_URL}")
-        print("===========================\n")
+# Use DATABASE_URL if provided, otherwise construct based on environment
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    if ENV == "production":
+        DB_PATH = Path("/data/reddit_analysis.db")
+        DATABASE_URL = "sqlite:////data/reddit_analysis.db"
     else:
-        # Use production-specific database file
-        DB_PATH = Path("./reddit_analysis_prod.db")
-        DATABASE_URL = f"sqlite:///./reddit_analysis_prod.db"
-        # Ensure directory exists
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        print("\n=== Database Configuration ===")
-        print(f"Environment: Production")
-        print(f"Using Production Database: {DB_PATH}")
-        print("===========================\n")
-else:
-    # Development database
-    DB_PATH = Path("./reddit_analysis.db")
-    DATABASE_URL = "sqlite:///./reddit_analysis.db"
-    # Ensure directory exists
+        DB_PATH = Path("./reddit_analysis.db")
+        DATABASE_URL = "sqlite:///./reddit_analysis.db"
+    
+    # Ensure database directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    print("\n=== Database Configuration ===")
-    print(f"Environment: Development")
-    print(f"Using Development Database: {DB_PATH}")
-    print("===========================\n")
+
+print("\n=== Database Configuration ===")
+print(f"Environment: {ENV}")
+print(f"Database URL: {DATABASE_URL}")
+print("===========================\n")
 
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
@@ -83,8 +71,8 @@ def wait_for_db():
             
             # Check file permissions if in production
             if ENV == "production":
-                if Path("./reddit_analysis_prod.db").exists():
-                    check_file_permissions(Path("./reddit_analysis_prod.db"))
+                if Path("/data/reddit_analysis.db").exists():
+                    check_file_permissions(Path("/data/reddit_analysis.db"))
         
         time.sleep(retry_interval)
     
