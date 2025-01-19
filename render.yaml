@@ -5,45 +5,51 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Initialize database in build directory
+      # Initialize database in project directory
       mkdir -p /opt/render/project/data
       touch /opt/render/project/data/reddit_analysis.db
       chmod 777 /opt/render/project/data/reddit_analysis.db
-      # Run migrations
+      # Run migrations on the build database
       export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
       PYTHONPATH=/opt/render/project/src alembic upgrade head
     startCommand: |
-      # Wait for disk mount (max 60 seconds)
+      # Debug initial state
+      echo "Initial filesystem state:"
+      ls -la /
+      
+      # Wait for disk mount
       echo "Waiting for disk mount..."
       COUNTER=0
-      while [ ! -d /data ] && [ $COUNTER -lt 60 ]; do
-        echo "Attempt $COUNTER: Waiting for /data directory..."
-        ls -la /
-        sleep 1
+      while [ ! -d /data ] && [ $COUNTER -lt 30 ]; do
+        echo "Attempt $COUNTER: Waiting for /data directory to be mounted..."
+        sleep 2
         COUNTER=$((COUNTER + 1))
       done
-
-      if [ ! -d /data ]; then
-        echo "Error: /data directory not mounted after 60 seconds"
-        exit 1
-      fi
-
-      echo "Data directory mounted. Setting up permissions..."
-      # Set up data directory
-      chmod 777 /data
       
-      # Copy database if it doesn't exist
-      if [ ! -f /data/reddit_analysis.db ]; then
-        echo "Copying database to mounted volume..."
-        cp -f /opt/render/project/data/reddit_analysis.db /data/
-        chmod 777 /data/reddit_analysis.db
+      # Check if mount succeeded
+      if [ ! -d /data ]; then
+        echo "Warning: /data directory not mounted, using fallback location"
+        export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
+      else
+        echo "Data directory mounted, setting up database..."
+        # Try to copy database if /data is writable
+        if touch /data/test 2>/dev/null; then
+          rm /data/test
+          echo "Data directory is writable, copying database..."
+          cp -f /opt/render/project/data/reddit_analysis.db /data/
+          chmod 666 /data/reddit_analysis.db
+          export DATABASE_URL="sqlite:////data/reddit_analysis.db?mode=ro"
+        else
+          echo "Warning: /data is read-only, using fallback location"
+          export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
+        fi
       fi
       
       # Debug info
-      echo "Data directory contents:"
-      ls -la /data
-      echo "Database file details:"
-      ls -la /data/reddit_analysis.db || echo "Warning: Database file not found"
+      echo "Final filesystem state:"
+      ls -la /
+      echo "Database location:"
+      echo $DATABASE_URL
       echo "Process information:"
       id
       
@@ -56,8 +62,6 @@ services:
         value: true
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: DATABASE_URL
-        value: sqlite:////data/reddit_analysis.db?mode=ro
     disk:
       name: sqlite-data
       mountPath: /data

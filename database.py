@@ -17,9 +17,24 @@ ENV = os.getenv("ENV", "development")
 
 # Configure SQLite for different environments
 if ENV == "production":
-    DB_PATH = Path("/data/reddit_analysis.db")
-    FALLBACK_DB_PATH = Path("/opt/render/project/data/reddit_analysis.db")
-    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:////{DB_PATH.absolute()}?mode=ro")
+    # Use DATABASE_URL from environment if set
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    if DATABASE_URL:
+        logger.info(f"Using DATABASE_URL from environment: {DATABASE_URL}")
+    else:
+        # Fallback to default paths
+        PRIMARY_DB_PATH = Path("/data/reddit_analysis.db")
+        FALLBACK_DB_PATH = Path("/opt/render/project/data/reddit_analysis.db")
+        
+        # Check which path to use
+        if PRIMARY_DB_PATH.exists() and os.access(str(PRIMARY_DB_PATH), os.R_OK):
+            DB_PATH = PRIMARY_DB_PATH
+            DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}?mode=ro"
+        else:
+            DB_PATH = FALLBACK_DB_PATH
+            DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}"
+        
+        logger.info(f"Using database path: {DB_PATH}")
 else:
     DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
@@ -27,7 +42,6 @@ else:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Log database configuration
-logger.info(f"Database path: {DB_PATH}")
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
 
@@ -59,46 +73,25 @@ def wait_for_db():
     for attempt in range(max_retries):
         logger.info(f"Checking database file (attempt {attempt + 1}/{max_retries})...")
         
-        # First try primary path
-        if DB_PATH.exists():
-            logger.info(f"Found database at primary path: {DB_PATH}")
-            check_file_permissions(DB_PATH)
-            try:
-                with open(DB_PATH, 'rb') as f:
-                    f.seek(0)
-                    logger.info(f"Successfully opened database file at {DB_PATH}")
-                    return True
-            except IOError as e:
-                logger.warning(f"Cannot read primary database: {e}")
-        else:
-            logger.warning(f"Primary database path does not exist: {DB_PATH}")
+        try:
+            # Try to connect to database
+            with engine.connect() as conn:
+                conn.execute("SELECT 1")
+                logger.info("Successfully connected to database")
+                return True
+        except Exception as e:
+            logger.warning(f"Database connection attempt {attempt + 1} failed: {e}")
             
-            # In production, check fallback path
-            if ENV == "production" and FALLBACK_DB_PATH.exists():
-                logger.info(f"Checking fallback path: {FALLBACK_DB_PATH}")
-                check_file_permissions(FALLBACK_DB_PATH)
-                try:
-                    # Try to copy from fallback location
-                    subprocess.run(['cp', '-f', str(FALLBACK_DB_PATH), str(DB_PATH)], check=True)
-                    subprocess.run(['chmod', '777', str(DB_PATH)], check=True)
-                    logger.info("Successfully copied database from fallback location")
-                    continue  # Retry with the copied file
-                except subprocess.CalledProcessError as e:
-                    logger.error(f"Failed to copy from fallback location: {e}")
-        
-        # Check parent directories
-        logger.info("Checking parent directories...")
-        if not DB_PATH.parent.exists():
-            logger.warning(f"Parent directory {DB_PATH.parent} does not exist")
-            try:
-                DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Created parent directory {DB_PATH.parent}")
-            except Exception as e:
-                logger.error(f"Failed to create parent directory: {e}")
+            # Check file permissions if in production
+            if ENV == "production":
+                if PRIMARY_DB_PATH.exists():
+                    check_file_permissions(PRIMARY_DB_PATH)
+                if FALLBACK_DB_PATH.exists():
+                    check_file_permissions(FALLBACK_DB_PATH)
         
         time.sleep(retry_interval)
     
-    raise RuntimeError(f"Database file not accessible after {max_retries} attempts")
+    raise RuntimeError(f"Database not accessible after {max_retries} attempts")
 
 # Create SQLAlchemy engine with optimized settings for SQLite
 engine = create_engine(
@@ -148,13 +141,9 @@ def init_db():
         logger.info(f"Python executable: {sys.executable}")
         logger.info(f"Process UID/GID: {os.getuid()}/{os.getgid()}")
         
-        # Wait for database file to be accessible
+        # Wait for database to be accessible
         wait_for_db()
-        
-        # Verify database is readable
-        with engine.connect() as conn:
-            conn.execute("SELECT 1")
-            logger.info("Database connection test successful")
+        logger.info("Database initialization completed successfully")
             
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
