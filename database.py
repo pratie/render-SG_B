@@ -18,9 +18,9 @@ IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
 # Initialize DB_PATH based on environment
 if ENV == "production" or IS_RENDER:
-    DB_PATH = Path("/var/data/reddit_analysis.db")
-    DEFAULT_DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
-    logger.info("Using production database on Render at /var/data")
+    DB_PATH = Path("/database/reddit_analysis.db")
+    DEFAULT_DATABASE_URL = "sqlite:////database/reddit_analysis.db"
+    logger.info("Using production database on Render at /database")
 else:
     DB_PATH = Path("./reddit_analysis.db")
     DEFAULT_DATABASE_URL = "sqlite:///./reddit_analysis.db"
@@ -99,8 +99,8 @@ def wait_for_db():
             
             # Check file permissions if in production
             if ENV == "production":
-                if Path("/var/data/reddit_analysis.db").exists():
-                    check_file_permissions(Path("/var/data/reddit_analysis.db"))
+                if Path("/database/reddit_analysis.db").exists():
+                    check_file_permissions(Path("/database/reddit_analysis.db"))
         
         time.sleep(retry_interval)
     
