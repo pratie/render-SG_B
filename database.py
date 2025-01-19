@@ -50,25 +50,34 @@ def check_file_permissions(path):
         logger.error(f"Error checking file permissions: {e}")
         return False
 
-# Initialize DB_PATH and DATABASE_URL based on environment
+# Get DATABASE_URL from environment or set default
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 if ENV == "production" or IS_RENDER:
-    # Always use absolute path in production
-    DB_PATH = Path("/var/data/reddit_analysis.db").resolve()
-    # Force 4 slashes for absolute path
-    DATABASE_URL = f"sqlite:////var/data/reddit_analysis.db"
-    logger.info(f"Using production database on Render at {DB_PATH}")
+    # Force absolute path in production
+    if not DATABASE_URL or not DATABASE_URL.startswith("sqlite:////"):
+        DB_PATH = Path("/var/data/reddit_analysis.db").resolve()
+        DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
+        logger.warning(f"Production environment requires absolute path. Forcing DATABASE_URL to: {DATABASE_URL}")
 else:
     # Use relative path for local development
-    DB_PATH = Path("./reddit_analysis.db")
-    DATABASE_URL = "sqlite:///./reddit_analysis.db"
-    logger.info("Using local development database")
+    if not DATABASE_URL:
+        DB_PATH = Path("./reddit_analysis.db")
+        DATABASE_URL = "sqlite:///./reddit_analysis.db"
+        logger.info("Using local development database")
 
-# Override DATABASE_URL only if it's a complete URL (not just a path)
-if os.getenv("DATABASE_URL") and "sqlite:" in os.getenv("DATABASE_URL"):
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    logger.info("Using DATABASE_URL from environment variables")
+# Extract DB_PATH from DATABASE_URL
+if DATABASE_URL.startswith("sqlite:////"):
+    # Absolute path
+    db_file = DATABASE_URL.replace("sqlite:////", "/")
+    DB_PATH = Path(db_file).resolve()
 else:
-    logger.info(f"Using configured DATABASE_URL: {DATABASE_URL}")
+    # Relative path
+    db_file = DATABASE_URL.replace("sqlite:///", "")
+    DB_PATH = Path(db_file)
+
+logger.info(f"Using database at path: {DB_PATH}")
+logger.info(f"Using DATABASE_URL: {DATABASE_URL}")
 
 # Check directory status before trying to create
 if ENV == "production" or IS_RENDER:

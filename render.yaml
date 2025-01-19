@@ -28,6 +28,7 @@ services:
       # Set environment variables
       export ENV=production
       export RENDER=true
+      export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       
       # Check directory permissions
       echo "=== Directory Permissions ==="
@@ -48,7 +49,7 @@ services:
       - key: RENDER
         value: "true"
       - key: DATABASE_URL
-        value: "sqlite:////var/data/reddit_analysis.db"
+        value: sqlite:////var/data/reddit_analysis.db
       - key: PYTHONUNBUFFERED
         value: "true"
       - key: PYTHON_VERSION
