@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
@@ -28,19 +28,39 @@ else:
 if ENV == "development":
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# Create SQLAlchemy engine with connection pooling and retry settings
+# Create SQLAlchemy engine with optimized settings for SQLite
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    pool_pre_ping=True,
-    pool_recycle=3600,
+    connect_args={
+        "check_same_thread": False,
+        "timeout": 30,  # 30 seconds timeout
+    }
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Configure SQLite for better performance
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    # Use memory-efficient journal mode
+    cursor.execute("PRAGMA journal_mode=WAL")
+    # Limit cache size to 64MB
+    cursor.execute("PRAGMA cache_size=-65536")
+    # Enable memory-efficient page cache
+    cursor.execute("PRAGMA page_size=4096")
+    # Set busy timeout
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    expire_on_commit=False  # Reduce memory usage
+)
+
 Base = declarative_base()
 
 def get_db():
-    """Get database session."""
     db = SessionLocal()
     try:
         yield db

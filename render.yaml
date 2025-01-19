@@ -6,11 +6,12 @@ services:
       pip install -r requirements.txt
       # Wait for disk mount
       while [ ! -d /data ]; do sleep 1; done
-      # Create empty database file
+      # Create empty database file with proper permissions
       touch /data/reddit_analysis.db
+      chmod 644 /data/reddit_analysis.db
       # Initialize database
       alembic upgrade head
-    startCommand: gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+    startCommand: gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --worker-tmp-dir /dev/shm --max-requests 1000 --max-requests-jitter 50 --timeout 120
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
