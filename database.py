@@ -16,28 +16,17 @@ ENV = os.getenv("ENV", "development")
 # Configure SQLite for different environments
 if ENV == "production":
     DB_PATH = Path("/data/reddit_analysis.db")
-    DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}?mode=rw"
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:////{DB_PATH.absolute()}?mode=ro")  # Use read-only mode by default
 else:
     DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
+    # In development, ensure directory exists
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Log database configuration
 logger.info(f"Database path: {DB_PATH}")
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
-
-def ensure_db_exists():
-    """Ensure the database file exists and is accessible."""
-    try:
-        if not DB_PATH.exists():
-            logger.info(f"Creating database file at {DB_PATH}")
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            DB_PATH.touch(mode=0o666)  # Create with read/write permissions
-            logger.info("Database file created successfully")
-        return True
-    except Exception as e:
-        logger.error(f"Error creating database file: {e}")
-        return False
 
 def wait_for_db():
     """Wait for database file to be accessible."""
@@ -45,20 +34,17 @@ def wait_for_db():
     retry_interval = 1
     
     for attempt in range(max_retries):
-        if ensure_db_exists():
+        if DB_PATH.exists():
             try:
-                # Try to open the file for read and write
-                with open(DB_PATH, 'a+b') as f:
-                    # Try to write to make sure we have write permissions
-                    f.seek(0, 2)  # Seek to end
-                    f.write(b'')  # Try to write empty bytes
-                    f.flush()     # Ensure write is committed
+                # Try to open the file for reading (we don't need write access in production)
+                with open(DB_PATH, 'rb') as f:
+                    f.seek(0)  # Try to seek to verify readability
                     logger.info(f"Database file is accessible at {DB_PATH}")
                     return True
             except IOError as e:
-                logger.warning(f"Attempt {attempt + 1}/{max_retries}: Database file exists but not writable: {e}")
+                logger.warning(f"Attempt {attempt + 1}/{max_retries}: Database file exists but not readable: {e}")
         else:
-            logger.warning(f"Attempt {attempt + 1}/{max_retries}: Database file creation failed")
+            logger.warning(f"Attempt {attempt + 1}/{max_retries}: Waiting for database file")
         
         time.sleep(retry_interval)
     
@@ -109,17 +95,10 @@ def init_db():
     try:
         logger.info("Starting database initialization...")
         
-        # Ensure database file exists and is accessible
+        # Wait for database file to be accessible
         wait_for_db()
         
-        # Import models here to avoid circular imports
-        from models import Base
-        
-        # Create database tables
-        Base.metadata.create_all(bind=engine)
-        logger.info("Database tables created successfully")
-        
-        # Verify database is writable
+        # Verify database is readable
         with engine.connect() as conn:
             conn.execute("SELECT 1")
             logger.info("Database connection test successful")

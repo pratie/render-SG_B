@@ -5,11 +5,18 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      mkdir -p /data
-      touch /data/reddit_analysis.db
-      chmod 777 /data/reddit_analysis.db
-      alembic upgrade head
+      # Create data directory in the build directory
+      mkdir -p $HOME/data
+      touch $HOME/data/reddit_analysis.db
+      chmod 777 $HOME/data/reddit_analysis.db
+      # Set up the database
+      cp -r $HOME/data /opt/render/project/
+      PYTHONPATH=/opt/render/project/src DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db" alembic upgrade head
     startCommand: |
+      # Copy the initialized database to the mounted volume
+      mkdir -p /data
+      cp $HOME/data/reddit_analysis.db /data/
+      chmod 777 /data/reddit_analysis.db
       ls -la /data
       uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
