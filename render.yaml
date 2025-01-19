@@ -5,91 +5,38 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      PYTHONPATH=/opt/render/project/src
     startCommand: |
-      # Debug disk mounting
-      echo "=== Checking Disk Mount ==="
-      df -h | grep /var/data || echo "Warning: Disk not mounted!"
-      ls -la /var/data || echo "Warning: Directory not accessible!"
-      id  # Print current user info
-      echo "==========================="
-      
-      # Wait for disk to be mounted
-      echo "Waiting for disk mount..."
-      for i in {1..30}; do
-        if [ -d "/var/data" ]; then
-          echo "Disk mounted successfully!"
-          break
-        fi
-        echo "Attempt $i: Waiting for disk mount..."
-        sleep 1
-      done
-      
       # Set environment variables
       export ENV=production
       export RENDER=true
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       export PYTHONPATH=/opt/render/project/src
       
-      # Ensure database directory is writable
-      echo "=== Setting up database directory ==="
-      ls -la /var/data
-      chmod 777 /var/data || echo "Cannot change permissions of /var/data"
-      echo "==========================="
-      
-      # Create and set up database file
-      echo "=== Setting up database ==="
-      touch /var/data/reddit_analysis.db
-      chmod 666 /var/data/reddit_analysis.db
-      ls -la /var/data/reddit_analysis.db
-      echo "==========================="
-      
-      # Debug Python environment
-      echo "=== Python Environment ==="
-      which python
-      python --version
-      echo "PYTHONPATH: $PYTHONPATH"
-      pip list
-      echo "==========================="
-      
-      # Debug current directory
       echo "=== Current Directory ==="
       pwd
       ls -la
       echo "==========================="
       
-      # Run database migrations
-      echo "=== Running Database Migrations ==="
-      echo "Environment: $ENV"
-      echo "Database URL: $DATABASE_URL"
-      echo "Python Path: $PYTHONPATH"
-      
-      # Show migration files
-      echo "=== Migration Files ==="
-      ls -la alembic/versions/
-      cat alembic/versions/*.py
+      echo "=== Database Status Before Migration ==="
+      sqlite3 /var/data/reddit_analysis.db ".tables" || echo "No tables yet"
       echo "==========================="
       
-      # Run migrations with debug output
       echo "=== Running Migrations ==="
-      alembic upgrade head --sql || echo "Failed to generate SQL"
-      echo "=== Attempting migration ==="
-      alembic upgrade head || {
-        echo "Migration failed! Database status:"
-        sqlite3 /var/data/reddit_analysis.db ".tables"
-        sqlite3 /var/data/reddit_analysis.db ".schema"
-        echo "Migration history:"
-        alembic history
-        echo "Current revision:"
-        alembic current
-        exit 1
-      }
+      # Ensure we're in the correct directory
+      cd /opt/render/project/src
       
-      # Verify database
-      echo "=== Final Database Status ==="
-      echo "Tables:"
+      # Run migrations
+      echo "Current directory: $(pwd)"
+      echo "Python path: $PYTHONPATH"
+      echo "Database URL: $DATABASE_URL"
+      
+      # Run alembic migrations
+      alembic upgrade head
+      
+      echo "=== Verifying Migration ==="
+      echo "Tables after migration:"
       sqlite3 /var/data/reddit_analysis.db ".tables"
-      echo "Schema:"
+      echo "Schema after migration:"
       sqlite3 /var/data/reddit_analysis.db ".schema"
       echo "==========================="
       

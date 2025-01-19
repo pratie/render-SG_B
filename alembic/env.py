@@ -9,7 +9,8 @@ from sqlalchemy import pool
 from alembic import context
 
 # Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+parent_dir = os.path.dirname(os.path.dirname(__file__))
+sys.path.append(parent_dir)
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +36,8 @@ if not DATABASE_URL:
         DATABASE_URL = "sqlite:///./reddit_analysis.db"
 
 print(f"Using DATABASE_URL: {DATABASE_URL}")
+print(f"Current directory: {os.getcwd()}")
+print(f"Parent directory: {parent_dir}")
 
 # Override sqlalchemy.url with environment-specific configuration
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
@@ -65,27 +68,13 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # Create database directory if it doesn't exist
+    # Get database path from URL
     db_path = DATABASE_URL.split(":///")[-1]
     db_dir = os.path.dirname(db_path)
     
-    if db_dir and not os.path.exists(db_dir):
-        try:
-            os.makedirs(db_dir, exist_ok=True)
-            print(f"Created database directory: {db_dir}")
-        except Exception as e:
-            print(f"Warning: Could not create database directory: {e}")
+    print(f"Database path: {db_path}")
+    print(f"Database directory: {db_dir}")
     
-    # Create empty database file if it doesn't exist
-    if not os.path.exists(db_path):
-        try:
-            Path(db_path).touch()
-            if ENV == "production" or IS_RENDER:
-                os.chmod(db_path, 0o666)
-            print(f"Created database file: {db_path}")
-        except Exception as e:
-            print(f"Warning: Could not create database file: {e}")
-
     # Configure the database connection
     configuration = config.get_section(config.config_ini_section)
     if not configuration:
