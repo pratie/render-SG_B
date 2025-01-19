@@ -24,8 +24,7 @@ else:
     DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
 
-# In production, we assume /data exists and is managed by Render
-# We only create directories in development
+# In development, ensure directory exists
 if ENV == "development":
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,20 +48,14 @@ def get_db():
         db.close()
 
 def init_db():
-    """Initialize database tables."""
+    """Initialize the database and create all tables."""
     try:
         # Import models here to avoid circular imports
         from models import Base
         
-        # Create an empty database file if it doesn't exist
-        if not DB_PATH.exists():
-            DB_PATH.touch()
-            if ENV == "production":
-                os.chmod(DB_PATH, 0o666)
-        
-        # Create all tables
+        # Create database tables
         Base.metadata.create_all(bind=engine)
-        logger.info(f"Database initialized at {DB_PATH}")
+        logger.info(f"Database initialized successfully at {DB_PATH}")
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
         raise
