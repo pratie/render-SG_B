@@ -3,35 +3,22 @@ services:
     name: reddit-tracker-api
     env: python
     buildCommand: |
+      python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Wait for disk mount and set up database
-      while [ ! -d /data ]; do sleep 1; done
-      # Set up data directory
-      sudo mkdir -p /data
-      sudo chown -R 1000:1000 /data
-      sudo chmod -R 777 /data
-      # Create database file
+      mkdir -p /data
       touch /data/reddit_analysis.db
       chmod 777 /data/reddit_analysis.db
-      # Initialize database
-      PYTHONPATH=/opt/render/project/src alembic upgrade head
+      alembic upgrade head
     startCommand: |
-      # Start the application
-      gunicorn main:app \
-        --workers 2 \
-        --worker-class uvicorn.workers.UvicornWorker \
-        --bind 0.0.0.0:$PORT \
-        --worker-tmp-dir /dev/shm \
-        --max-requests 1000 \
-        --max-requests-jitter 50 \
-        --timeout 120
+      ls -la /data
+      uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
       - key: ENV
         value: production
       - key: PYTHONUNBUFFERED
-        value: "true"
+        value: true
+      - key: PYTHON_VERSION
+        value: 3.11.0
     disk:
       name: sqlite-data
       mountPath: /data
