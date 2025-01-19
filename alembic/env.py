@@ -24,21 +24,17 @@ config = context.config
 ENV = os.getenv("ENV", "development")
 IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
-# Get DATABASE_URL from environment or set default
+# Get DATABASE_URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Configure SQLite for different environments
-if ENV == "production" or IS_RENDER:
-    if not DATABASE_URL:
-        DB_PATH = Path("/var/data/reddit_analysis.db")
-        DATABASE_URL = f"sqlite:////var/data/reddit_analysis.db"
-else:
-    if not DATABASE_URL:
-        DB_PATH = Path("./reddit_analysis.db")
+if not DATABASE_URL:
+    # Configure SQLite for different environments
+    if ENV == "production" or IS_RENDER:
+        DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
+    else:
         DATABASE_URL = "sqlite:///./reddit_analysis.db"
 
-# Ensure the database directory exists
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+print(f"Using DATABASE_URL: {DATABASE_URL}")
 
 # Override sqlalchemy.url with environment-specific configuration
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
@@ -75,10 +71,10 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     # Create an empty database file if it doesn't exist
-    if not DB_PATH.exists():
-        DB_PATH.touch()
+    if not Path(DATABASE_URL.split(":///")[-1]).exists():
+        Path(DATABASE_URL.split(":///")[-1]).touch()
         if ENV == "production":
-            os.chmod(DB_PATH, 0o666)
+            os.chmod(Path(DATABASE_URL.split(":///")[-1]), 0o666)
 
     # Configure the database connection
     configuration = config.get_section(config.config_ini_section)

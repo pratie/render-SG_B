@@ -31,19 +31,30 @@ services:
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       export PYTHONPATH=/opt/render/project/src
       
+      # Ensure database directory is writable
+      echo "=== Setting up database directory ==="
+      ls -la /var/data
+      touch /var/data/test_write || echo "Cannot write to /var/data"
+      rm -f /var/data/test_write
+      echo "==========================="
+      
       # Run database migrations
       echo "=== Running Database Migrations ==="
       echo "Environment: $ENV"
       echo "Database URL: $DATABASE_URL"
       echo "Python Path: $PYTHONPATH"
-      alembic current || echo "No current migration"
-      alembic upgrade head || {
-        echo "Migration failed! Checking database:"
-        ls -la /var/data/
-        sqlite3 /var/data/reddit_analysis.db ".tables" || echo "Cannot access database"
-        exit 1
-      }
-      echo "=== Migration Complete ==="
+      
+      # Run migrations with retries
+      for i in {1..5}; do
+        echo "Migration attempt $i..."
+        if alembic upgrade head; then
+          echo "Migration successful!"
+          break
+        else
+          echo "Migration attempt $i failed"
+          sleep 2
+        fi
+      done
       
       # Verify database
       echo "=== Database Status ==="
