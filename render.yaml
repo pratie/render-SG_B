@@ -65,3 +65,38 @@ services:
       name: sqlite-data
       mountPath: /var/data
       sizeGB: 1
+
+  - type: cron
+    name: reddit-tracker-alerts
+    env: python
+    schedule: "*/30 * * * *"  # Runs every 30 minutes
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: |
+      export ENV=production
+      export RENDER=true
+      export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
+      export PYTHONPATH=/opt/render/project/src
+      
+      cd /opt/render/project/src
+      python telegrambot.py
+    envVars:
+      - key: ENV
+        value: production
+      - key: RENDER
+        value: "true"
+      - key: DATABASE_URL
+        value: sqlite:////var/data/reddit_analysis.db
+      - key: PYTHONUNBUFFERED
+        value: "true"
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false  # Add this in Render dashboard
+      - key: TELEGRAM_CHAT_ID
+        sync: false  # Add this in Render dashboard
+    disk:
+      name: sqlite-data  # Same disk name as web service
+      mountPath: /var/data
+      sizeGB: 1
