@@ -5,14 +5,12 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Run migrations after disk is mounted in startCommand
       PYTHONPATH=/opt/render/project/src
     startCommand: |
       # Debug disk mounting
       echo "=== Checking Disk Mount ==="
-      df -h
-      mount | grep var
-      ls -la /var/data
+      df -h | grep /var/data
+      ls -la /var/data || echo "Directory does not exist yet"
       echo "==========================="
       
       # Set environment variables
@@ -27,11 +25,11 @@ services:
       # Run migrations if needed
       PYTHONPATH=/opt/render/project/src alembic upgrade head
       
-      # Debug info
+      # Verify database setup
       echo "=== Database Configuration ==="
       echo "Environment: $ENV"
+      echo "Mount Path: /var/data"
       echo "Database Path: /var/data/reddit_analysis.db"
-      echo "Render: $RENDER"
       ls -la /var/data/
       echo "==========================="
       
@@ -42,6 +40,8 @@ services:
         value: production
       - key: RENDER
         value: "true"
+      - key: DATABASE_URL
+        value: "sqlite:////var/data/reddit_analysis.db"
       - key: PYTHONUNBUFFERED
         value: "true"
       - key: PYTHON_VERSION

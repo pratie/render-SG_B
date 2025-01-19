@@ -22,7 +22,7 @@ if not DATABASE_URL:
     if ENV == "production" or IS_RENDER:
         DB_PATH = Path("/var/data/reddit_analysis.db")
         DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
-        logger.info("Using production database on Render")
+        logger.info("Using production database on Render at /var/data")
     else:
         DB_PATH = Path("./reddit_analysis.db")
         DATABASE_URL = "sqlite:///./reddit_analysis.db"
@@ -30,6 +30,24 @@ if not DATABASE_URL:
     
     # Ensure database directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# Log configuration
+logger.info("=== Database Configuration ===")
+logger.info(f"Environment: {ENV}")
+logger.info(f"Running on Render: {IS_RENDER}")
+logger.info(f"Database URL: {DATABASE_URL}")
+logger.info(f"Database Path: {DB_PATH}")
+logger.info("===========================")
+
+# Check if we can access the database directory
+try:
+    if not DB_PATH.parent.exists():
+        logger.error(f"Database directory does not exist: {DB_PATH.parent}")
+    else:
+        logger.info(f"Database directory exists: {DB_PATH.parent}")
+        logger.info(f"Directory permissions: {oct(DB_PATH.parent.stat().st_mode)[-3:]}")
+except Exception as e:
+    logger.error(f"Error checking database directory: {e}")
 
 print("\n=== Database Configuration ===")
 print(f"Environment: {ENV}")
