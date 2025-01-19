@@ -26,10 +26,19 @@ ENV = os.getenv("ENV", "development")
 
 # Set database path based on environment
 if ENV == "production":
-    DB_PATH = "/data/reddit_analysis.db"
+    PRIMARY_DB_PATH = Path("/data/reddit_analysis.db")
+    FALLBACK_DB_PATH = Path("/opt/render/project/data/reddit_analysis.db")
+    
+    # Check which path to use
+    if PRIMARY_DB_PATH.exists() and os.access(str(PRIMARY_DB_PATH), os.R_OK):
+        DB_PATH = str(PRIMARY_DB_PATH)
+        logger.info("Using mounted volume database")
+    else:
+        DB_PATH = str(FALLBACK_DB_PATH)
+        logger.info("Using fallback database path")
 else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    DB_PATH = os.path.join(BASE_DIR, 'reddit_analysis.db')
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reddit_analysis.db')
+    logger.info("Using development database")
 
 logger.info(f"Using database path: {DB_PATH}")
 logger.info(f"Environment: {ENV}")
@@ -50,22 +59,47 @@ if TELEGRAM_BOT_TOKEN:
 if TELEGRAM_CHAT_ID:
     logger.info(f"Using chat ID: {TELEGRAM_CHAT_ID}")
 
+def check_db_path():
+    """Check database path and log relevant information."""
+    try:
+        if os.path.exists(DB_PATH):
+            st = os.stat(DB_PATH)
+            logger.info(f"Database file exists. Size: {st.st_size} bytes")
+            logger.info(f"File permissions: {oct(st.st_mode)[-3:]}")
+            logger.info(f"UID/GID: {st.st_uid}/{st.st_gid}")
+            return True
+        else:
+            logger.error(f"Database file not found at: {DB_PATH}")
+            if ENV == "production":
+                logger.info("Checking database paths...")
+                if PRIMARY_DB_PATH.exists():
+                    logger.info(f"Primary database exists at: {PRIMARY_DB_PATH}")
+                if FALLBACK_DB_PATH.exists():
+                    logger.info(f"Fallback database exists at: {FALLBACK_DB_PATH}")
+            return False
+    except Exception as e:
+        logger.error(f"Error checking database path: {e}")
+        return False
+
 async def get_db_connection():
     """Get database connection with retry logic."""
     max_retries = 3
     retry_delay = 5  # seconds
     
+    if not check_db_path():
+        return None
+    
     for attempt in range(max_retries):
         try:
-            if not os.path.exists(DB_PATH):
-                logger.error(f"Database file not found at: {DB_PATH}")
-                if ENV == "production":
-                    logger.info("Checking Render disk mount...")
-                    logger.info(f"Directory contents of /data: {os.listdir('/data')}")
-                return None
-                
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
+            
+            # Test the connection
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            
+            logger.info("Successfully connected to database")
             return conn
             
         except sqlite3.Error as e:
@@ -213,4 +247,8 @@ def job():
 
 if __name__ == "__main__":
     logger.info(f"Starting alert service in {ENV} environment...")
-    job()
+    # Check database path before starting
+    if check_db_path():
+        job()
+    else:
+        logger.error("Cannot start alert service - database not accessible")
