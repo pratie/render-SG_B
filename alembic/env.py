@@ -50,10 +50,6 @@ if config.config_file_name is not None:
 # Add your model's MetaData object here for 'autogenerate' support
 target_metadata = Base.metadata
 
-# Exclude SQLite system tables
-def include_object(object, name, type_, reflected, compare_to):
-    return not (type_ == "table" and name in ["sqlite_sequence", "sqlite_master"])
-
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
@@ -62,7 +58,6 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -70,14 +65,31 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # Create an empty database file if it doesn't exist
-    if not Path(DATABASE_URL.split(":///")[-1]).exists():
-        Path(DATABASE_URL.split(":///")[-1]).touch()
-        if ENV == "production":
-            os.chmod(Path(DATABASE_URL.split(":///")[-1]), 0o666)
+    # Create database directory if it doesn't exist
+    db_path = DATABASE_URL.split(":///")[-1]
+    db_dir = os.path.dirname(db_path)
+    
+    if db_dir and not os.path.exists(db_dir):
+        try:
+            os.makedirs(db_dir, exist_ok=True)
+            print(f"Created database directory: {db_dir}")
+        except Exception as e:
+            print(f"Warning: Could not create database directory: {e}")
+    
+    # Create empty database file if it doesn't exist
+    if not os.path.exists(db_path):
+        try:
+            Path(db_path).touch()
+            if ENV == "production" or IS_RENDER:
+                os.chmod(db_path, 0o666)
+            print(f"Created database file: {db_path}")
+        except Exception as e:
+            print(f"Warning: Could not create database file: {e}")
 
     # Configure the database connection
     configuration = config.get_section(config.config_ini_section)
+    if not configuration:
+        configuration = {}
     configuration["sqlalchemy.url"] = DATABASE_URL
 
     connectable = engine_from_config(
@@ -90,7 +102,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            include_object=include_object,
+            compare_type=True,
         )
 
         with context.begin_transaction():

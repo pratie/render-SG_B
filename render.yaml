@@ -34,15 +34,31 @@ services:
       # Ensure database directory is writable
       echo "=== Setting up database directory ==="
       ls -la /var/data
+      chmod 777 /var/data || echo "Cannot change permissions of /var/data"
       touch /var/data/test_write || echo "Cannot write to /var/data"
       rm -f /var/data/test_write
       echo "==========================="
+      
+      # Initialize alembic if not already initialized
+      echo "=== Initializing Alembic ==="
+      if [ ! -f "/var/data/alembic.ini" ]; then
+        cp alembic.ini /var/data/alembic.ini
+        cp -r alembic /var/data/
+        echo "Copied alembic files to /var/data"
+      fi
       
       # Run database migrations
       echo "=== Running Database Migrations ==="
       echo "Environment: $ENV"
       echo "Database URL: $DATABASE_URL"
       echo "Python Path: $PYTHONPATH"
+      
+      # Initialize fresh database if needed
+      if [ ! -f "/var/data/reddit_analysis.db" ]; then
+        echo "Creating fresh database..."
+        touch /var/data/reddit_analysis.db
+        chmod 666 /var/data/reddit_analysis.db
+      fi
       
       # Run migrations with retries
       for i in {1..5}; do
@@ -51,14 +67,21 @@ services:
           echo "Migration successful!"
           break
         else
-          echo "Migration attempt $i failed"
+          echo "Migration attempt $i failed. Checking database..."
+          ls -la /var/data/reddit_analysis.db
+          sqlite3 /var/data/reddit_analysis.db ".schema" || echo "Cannot access database"
           sleep 2
         fi
       done
       
       # Verify database
       echo "=== Database Status ==="
+      echo "Database file:"
+      ls -la /var/data/reddit_analysis.db
+      echo "Tables:"
       sqlite3 /var/data/reddit_analysis.db ".tables" || echo "Cannot access database"
+      echo "Schema:"
+      sqlite3 /var/data/reddit_analysis.db ".schema" || echo "Cannot access database"
       echo "==========================="
       
       # Start the application
