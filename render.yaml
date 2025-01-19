@@ -8,8 +8,17 @@ services:
       # Run migrations after disk is mounted in startCommand
       PYTHONPATH=/opt/render/project/src
     startCommand: |
+      # Debug disk mounting
+      echo "=== Checking Disk Mount ==="
+      df -h
+      mount | grep var
+      ls -la /var/data
+      echo "==========================="
+      
+      # Set environment variables
       export ENV=production
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
+      export RENDER=true
       
       # Ensure database directory exists and is writable
       mkdir -p /var/data
@@ -22,6 +31,7 @@ services:
       echo "=== Database Configuration ==="
       echo "Environment: $ENV"
       echo "Database Path: /var/data/reddit_analysis.db"
+      echo "Render: $RENDER"
       ls -la /var/data/
       echo "==========================="
       
@@ -30,8 +40,10 @@ services:
     envVars:
       - key: ENV
         value: production
+      - key: RENDER
+        value: "true"
       - key: PYTHONUNBUFFERED
-        value: true
+        value: "true"
       - key: PYTHON_VERSION
         value: 3.11.0
     disk:
