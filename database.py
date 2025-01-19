@@ -16,23 +16,28 @@ logger = logging.getLogger(__name__)
 ENV = os.getenv("ENV", "development")
 IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
-# Initialize DB_PATH based on environment
+# Initialize DB_PATH and DATABASE_URL based on environment
 if ENV == "production" or IS_RENDER:
     DB_PATH = Path("/database/reddit_analysis.db")
-    DEFAULT_DATABASE_URL = "sqlite:////database/reddit_analysis.db"
+    # Use absolute path with 4 slashes for SQLite URL in production
+    DATABASE_URL = "sqlite:////database/reddit_analysis.db"
     logger.info("Using production database on Render at /database")
 else:
     DB_PATH = Path("./reddit_analysis.db")
-    DEFAULT_DATABASE_URL = "sqlite:///./reddit_analysis.db"
+    # Use relative path with 3 slashes for local development
+    DATABASE_URL = "sqlite:///./reddit_analysis.db"
     logger.info("Using local development database")
 
-# Use DATABASE_URL if provided, otherwise use default
-DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+# Override DATABASE_URL if explicitly provided in environment
+if os.getenv("DATABASE_URL"):
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    logger.info("Using DATABASE_URL from environment variables")
 
 # Ensure database directory exists
 try:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Ensured database directory exists: {DB_PATH.parent}")
+    logger.info(f"Directory permissions: {oct(DB_PATH.parent.stat().st_mode)[-3:]}")
 except Exception as e:
     logger.error(f"Error creating database directory: {e}")
 

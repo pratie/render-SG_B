@@ -9,29 +9,30 @@ services:
     startCommand: |
       # Debug disk mounting
       echo "=== Checking Disk Mount ==="
-      df -h | grep /database
-      ls -la /database || echo "Directory does not exist yet"
+      df -h | grep /database || echo "Warning: Disk not mounted!"
+      ls -la /database || echo "Warning: Directory not accessible!"
       echo "==========================="
       
       # Set environment variables
       export ENV=production
-      export DATABASE_URL="sqlite:////database/reddit_analysis.db"
       export RENDER=true
       
-      # Ensure database directory exists and is writable
+      # Ensure database directory exists and has full permissions
       mkdir -p /database
-      chmod 777 /database
+      chmod -R 777 /database  # Recursive 777 to ensure all files are writable
       
-      # Run migrations if needed
-      PYTHONPATH=/opt/render/project/src alembic upgrade head
-      
-      # Verify database setup
+      # Debug info
       echo "=== Database Configuration ==="
       echo "Environment: $ENV"
       echo "Mount Path: /database"
       echo "Database Path: /database/reddit_analysis.db"
+      echo "Directory Permissions:"
       ls -la /database/
+      stat -f "%A %N" /database  # Show numeric permissions
       echo "==========================="
+      
+      # Run migrations if needed
+      PYTHONPATH=/opt/render/project/src alembic upgrade head
       
       # Start the application
       exec uvicorn main:app --host 0.0.0.0 --port $PORT
