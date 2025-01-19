@@ -24,61 +24,45 @@ if ENV == "production":
         print(f"Environment: Production")
         print(f"Database URL: {DATABASE_URL}")
         print("===========================\n")
-        logger.info(f"Database URL: {DATABASE_URL}")
-        logger.info(f"Environment: {ENV}")
     else:
-        # Fallback to default paths
-        PRIMARY_DB_PATH = Path("/data/reddit_analysis.db")
-        FALLBACK_DB_PATH = Path("/opt/render/project/data/reddit_analysis.db")
-        
-        # Check which path to use
-        if PRIMARY_DB_PATH.exists() and os.access(str(PRIMARY_DB_PATH), os.R_OK):
-            DB_PATH = PRIMARY_DB_PATH
-            DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}?mode=ro"
-            print("\n=== Database Configuration ===")
-            print(f"Environment: Production")
-            print(f"Using Primary Database Path: {DB_PATH}")
-            print("===========================\n")
-            logger.info(f"Using database path: {DB_PATH}")
-        else:
-            DB_PATH = FALLBACK_DB_PATH
-            DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}"
-            print("\n=== Database Configuration ===")
-            print(f"Environment: Production")
-            print(f"Using Fallback Database Path: {DB_PATH}")
-            print("===========================\n")
-            logger.info(f"Using database path: {DB_PATH}")
+        # Use production-specific database file
+        DB_PATH = Path("./reddit_analysis_prod.db")
+        DATABASE_URL = f"sqlite:///./reddit_analysis_prod.db"
+        # Ensure directory exists
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        print("\n=== Database Configuration ===")
+        print(f"Environment: Production")
+        print(f"Using Production Database: {DB_PATH}")
+        print("===========================\n")
 else:
-    DB_PATH = Path("./reddit_analysis.db")
-    DATABASE_URL = "sqlite:///./reddit_analysis.db"
-    # In development, ensure directory exists
+    # Development database
+    DB_PATH = Path("./reddit_analysis_dev.db")
+    DATABASE_URL = "sqlite:///./reddit_analysis_dev.db"
+    # Ensure directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     print("\n=== Database Configuration ===")
     print(f"Environment: Development")
-    print(f"Database Path: {DB_PATH}")
+    print(f"Using Development Database: {DB_PATH}")
     print("===========================\n")
-    logger.info(f"Database URL: {DATABASE_URL}")
-    logger.info(f"Environment: {ENV}")
+
+logger.info(f"Database URL: {DATABASE_URL}")
+logger.info(f"Environment: {ENV}")
 
 def check_file_permissions(path):
     """Check and log file and directory permissions."""
     try:
         if path.exists():
-            # Log file permissions
-            result = subprocess.run(['ls', '-la', str(path)], capture_output=True, text=True)
-            logger.info(f"File permissions for {path}:\n{result.stdout}")
-            
-            # Log parent directory permissions
-            result = subprocess.run(['ls', '-la', str(path.parent)], capture_output=True, text=True)
-            logger.info(f"Parent directory permissions for {path}:\n{result.stdout}")
-            
-            # Try to get file stats
-            stats = path.stat()
-            logger.info(f"File stats for {path} - mode: {oct(stats.st_mode)}, uid: {stats.st_uid}, gid: {stats.st_gid}")
+            st = os.stat(path)
+            logger.info(f"File exists. Size: {st.st_size} bytes")
+            logger.info(f"File permissions: {oct(st.st_mode)[-3:]}")
+            logger.info(f"UID/GID: {st.st_uid}/{st.st_gid}")
             return True
+        else:
+            logger.error(f"File not found: {path}")
+            return False
     except Exception as e:
-        logger.error(f"Error checking permissions for {path}: {e}")
-    return False
+        logger.error(f"Error checking file permissions: {e}")
+        return False
 
 def wait_for_db():
     """Wait for database file to be accessible."""
@@ -99,10 +83,8 @@ def wait_for_db():
             
             # Check file permissions if in production
             if ENV == "production":
-                if PRIMARY_DB_PATH.exists():
-                    check_file_permissions(PRIMARY_DB_PATH)
-                if FALLBACK_DB_PATH.exists():
-                    check_file_permissions(FALLBACK_DB_PATH)
+                if Path("./reddit_analysis_prod.db").exists():
+                    check_file_permissions(Path("./reddit_analysis_prod.db"))
         
         time.sleep(retry_interval)
     

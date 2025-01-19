@@ -6,52 +6,22 @@ services:
       python -m pip install --upgrade pip
       pip install -r requirements.txt
       # Initialize database in project directory
-      mkdir -p /opt/render/project/data
-      touch /opt/render/project/data/reddit_analysis.db
-      chmod 777 /opt/render/project/data/reddit_analysis.db
-      # Run migrations on the build database
-      export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
+      touch ./reddit_analysis_prod.db
+      chmod 777 ./reddit_analysis_prod.db
+      # Run migrations on the production database
+      export DATABASE_URL="sqlite:///./reddit_analysis_prod.db"
+      export ENV=production
       PYTHONPATH=/opt/render/project/src alembic upgrade head
     startCommand: |
-      # Debug initial state
-      echo "Initial filesystem state:"
-      ls -la /
-      
-      # Wait for disk mount
-      echo "Waiting for disk mount..."
-      COUNTER=0
-      while [ ! -d /data ] && [ $COUNTER -lt 30 ]; do
-        echo "Attempt $COUNTER: Waiting for /data directory to be mounted..."
-        sleep 2
-        COUNTER=$((COUNTER + 1))
-      done
-      
-      # Check if mount succeeded
-      if [ ! -d /data ]; then
-        echo "Warning: /data directory not mounted, using fallback location"
-        export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
-      else
-        echo "Data directory mounted, setting up database..."
-        # Try to copy database if /data is writable
-        if touch /data/test 2>/dev/null; then
-          rm /data/test
-          echo "Data directory is writable, copying database..."
-          cp -f /opt/render/project/data/reddit_analysis.db /data/
-          chmod 666 /data/reddit_analysis.db
-          export DATABASE_URL="sqlite:////data/reddit_analysis.db?mode=ro"
-        else
-          echo "Warning: /data is read-only, using fallback location"
-          export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
-        fi
-      fi
+      # Set database URL for production
+      export DATABASE_URL="sqlite:///./reddit_analysis_prod.db"
+      export ENV=production
       
       # Debug info
-      echo "Final filesystem state:"
-      ls -la /
-      echo "Database location:"
-      echo $DATABASE_URL
-      echo "Process information:"
-      id
+      echo "Database Configuration:"
+      echo "DATABASE_URL=$DATABASE_URL"
+      echo "ENV=$ENV"
+      ls -la ./reddit_analysis_prod.db
       
       # Start the application
       exec uvicorn main:app --host 0.0.0.0 --port $PORT
@@ -62,7 +32,5 @@ services:
         value: true
       - key: PYTHON_VERSION
         value: 3.11.0
-    disk:
-      name: sqlite-data
-      mountPath: /data
-      sizeGB: 1
+      - key: DATABASE_URL
+        value: sqlite:///./reddit_analysis_prod.db
