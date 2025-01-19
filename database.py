@@ -16,15 +16,20 @@ logger = logging.getLogger(__name__)
 ENV = os.getenv("ENV", "development")
 IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
+# Log system information
+logger.info(f"Current working directory: {os.getcwd()}")
+logger.info(f"Python executable: {os.sys.executable}")
+logger.info(f"Process UID/GID: {os.getuid()}/{os.getgid()}")
+
 # Initialize DB_PATH and DATABASE_URL based on environment
 if ENV == "production" or IS_RENDER:
-    DB_PATH = Path("/database/reddit_analysis.db")
-    # Use absolute path with 4 slashes for SQLite URL in production
-    DATABASE_URL = "sqlite:////database/reddit_analysis.db"
-    logger.info("Using production database on Render at /database")
+    # Always use absolute path in production
+    DB_PATH = Path("/var/data/reddit_analysis.db").resolve()
+    DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}"
+    logger.info(f"Using production database on Render at {DB_PATH}")
 else:
+    # Use relative path for local development
     DB_PATH = Path("./reddit_analysis.db")
-    # Use relative path with 3 slashes for local development
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
     logger.info("Using local development database")
 
@@ -37,16 +42,27 @@ if os.getenv("DATABASE_URL"):
 try:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Ensured database directory exists: {DB_PATH.parent}")
-    logger.info(f"Directory permissions: {oct(DB_PATH.parent.stat().st_mode)[-3:]}")
+    
+    # Set directory permissions in production
+    if ENV == "production" or IS_RENDER:
+        os.chmod(DB_PATH.parent, 0o777)
+        logger.info(f"Set directory permissions to 777")
+    
+    # Log directory permissions
+    permissions = oct(DB_PATH.parent.stat().st_mode)[-3:]
+    logger.info(f"Directory permissions: {permissions}")
+    
 except Exception as e:
-    logger.error(f"Error creating database directory: {e}")
+    logger.error(f"Error with database directory: {e}")
 
 # Log configuration
 logger.info("=== Database Configuration ===")
 logger.info(f"Environment: {ENV}")
 logger.info(f"Running on Render: {IS_RENDER}")
 logger.info(f"Database URL: {DATABASE_URL}")
-logger.info(f"Database Path: {DB_PATH}")
+logger.info(f"Database Path (absolute): {DB_PATH.absolute()}")
+logger.info(f"Database directory exists: {DB_PATH.parent.exists()}")
+logger.info(f"Database directory is writable: {os.access(DB_PATH.parent, os.W_OK)}")
 logger.info("===========================")
 
 # Check if we can access the database directory
@@ -104,8 +120,8 @@ def wait_for_db():
             
             # Check file permissions if in production
             if ENV == "production":
-                if Path("/database/reddit_analysis.db").exists():
-                    check_file_permissions(Path("/database/reddit_analysis.db"))
+                if Path("/var/data/reddit_analysis.db").exists():
+                    check_file_permissions(Path("/var/data/reddit_analysis.db"))
         
         time.sleep(retry_interval)
     

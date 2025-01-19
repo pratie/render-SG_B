@@ -9,8 +9,8 @@ services:
     startCommand: |
       # Debug disk mounting
       echo "=== Checking Disk Mount ==="
-      df -h | grep /database || echo "Warning: Disk not mounted!"
-      ls -la /database || echo "Warning: Directory not accessible!"
+      df -h | grep /var/data || echo "Warning: Disk not mounted!"
+      ls -la /var/data || echo "Warning: Directory not accessible!"
       echo "==========================="
       
       # Set environment variables
@@ -18,17 +18,17 @@ services:
       export RENDER=true
       
       # Ensure database directory exists and has full permissions
-      mkdir -p /database
-      chmod -R 777 /database  # Recursive 777 to ensure all files are writable
+      mkdir -p /var/data
+      chmod -R 777 /var/data  # Recursive 777 to ensure all files are writable
       
       # Debug info
       echo "=== Database Configuration ==="
       echo "Environment: $ENV"
-      echo "Mount Path: /database"
-      echo "Database Path: /database/reddit_analysis.db"
+      echo "Mount Path: /var/data"
+      echo "Database Path: /var/data/reddit_analysis.db"
       echo "Directory Permissions:"
-      ls -la /database/
-      stat -f "%A %N" /database  # Show numeric permissions
+      ls -la /var/data/
+      stat -f "%A %N" /var/data || stat /var/data  # Show numeric permissions (works on both BSD and Linux)
       echo "==========================="
       
       # Run migrations if needed
@@ -42,12 +42,12 @@ services:
       - key: RENDER
         value: "true"
       - key: DATABASE_URL
-        value: "sqlite:////database/reddit_analysis.db"
+        value: "sqlite:////var/data/reddit_analysis.db"
       - key: PYTHONUNBUFFERED
         value: "true"
       - key: PYTHON_VERSION
         value: 3.11.0
     disk:
       name: sqlite-data
-      mountPath: /database
+      mountPath: /var/data
       sizeGB: 1
