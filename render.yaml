@@ -4,10 +4,9 @@ services:
     env: python
     buildCommand: |
       pip install -r requirements.txt
-      mkdir -p /data
-      chmod -R 777 /data
+      # Wait for disk mount to be ready
+      while [ ! -d /data ]; do sleep 1; done
       touch /data/reddit_analysis.db
-      chmod 666 /data/reddit_analysis.db
       alembic upgrade head
     startCommand: gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
     envVars:
