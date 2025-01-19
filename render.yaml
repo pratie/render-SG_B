@@ -12,9 +12,13 @@ services:
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       export PYTHONPATH=/opt/render/project/src
       
-      echo "=== Current Directory ==="
-      pwd
-      ls -la
+      # Ensure we're in the right directory
+      cd /opt/render/project/src
+      
+      echo "=== Environment Setup ==="
+      echo "Current directory: $(pwd)"
+      echo "Python path: $PYTHONPATH"
+      echo "Database URL: $DATABASE_URL"
       echo "==========================="
       
       echo "=== Database Status Before Migration ==="
@@ -22,16 +26,20 @@ services:
       echo "==========================="
       
       echo "=== Running Migrations ==="
-      # Ensure we're in the correct directory
-      cd /opt/render/project/src
+      # Force remove any existing alembic_version table to ensure clean migration
+      sqlite3 /var/data/reddit_analysis.db "DROP TABLE IF EXISTS alembic_version;"
       
       # Run migrations
-      echo "Current directory: $(pwd)"
-      echo "Python path: $PYTHONPATH"
-      echo "Database URL: $DATABASE_URL"
-      
-      # Run alembic migrations
-      alembic upgrade head
+      PYTHONPATH=/opt/render/project/src alembic upgrade head || {
+        echo "Migration failed! Checking database state..."
+        echo "Database permissions:"
+        ls -la /var/data/reddit_analysis.db
+        echo "Current tables:"
+        sqlite3 /var/data/reddit_analysis.db ".tables"
+        echo "Current schema:"
+        sqlite3 /var/data/reddit_analysis.db ".schema"
+        exit 1
+      }
       
       echo "=== Verifying Migration ==="
       echo "Tables after migration:"

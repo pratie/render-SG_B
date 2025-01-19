@@ -25,15 +25,22 @@ config = context.config
 ENV = os.getenv("ENV", "development")
 IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 
-# Get DATABASE_URL from environment
+# Get DATABASE_URL from environment, with absolute path for production
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    # Configure SQLite for different environments
     if ENV == "production" or IS_RENDER:
         DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
     else:
         DATABASE_URL = "sqlite:///./reddit_analysis.db"
+else:
+    # Ensure we're using absolute path in production
+    if (ENV == "production" or IS_RENDER) and "sqlite://" in DATABASE_URL:
+        if not DATABASE_URL.startswith("sqlite:////"):
+            # Convert relative path to absolute
+            db_path = DATABASE_URL.split("sqlite:///")[1]
+            if not db_path.startswith("/"):
+                DATABASE_URL = f"sqlite:////var/data/reddit_analysis.db"
 
 print(f"Using DATABASE_URL: {DATABASE_URL}")
 print(f"Current directory: {os.getcwd()}")
