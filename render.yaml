@@ -11,24 +11,30 @@ services:
       echo "=== Checking Disk Mount ==="
       df -h | grep /var/data || echo "Warning: Disk not mounted!"
       ls -la /var/data || echo "Warning: Directory not accessible!"
+      id  # Print current user info
       echo "==========================="
+      
+      # Wait for disk to be mounted
+      echo "Waiting for disk mount..."
+      for i in {1..30}; do
+        if [ -d "/var/data" ]; then
+          echo "Disk mounted successfully!"
+          break
+        fi
+        echo "Attempt $i: Waiting for disk mount..."
+        sleep 1
+      done
       
       # Set environment variables
       export ENV=production
       export RENDER=true
       
-      # Ensure database directory exists and has full permissions
-      mkdir -p /var/data
-      chmod -R 777 /var/data  # Recursive 777 to ensure all files are writable
-      
-      # Debug info
-      echo "=== Database Configuration ==="
-      echo "Environment: $ENV"
-      echo "Mount Path: /var/data"
-      echo "Database Path: /var/data/reddit_analysis.db"
-      echo "Directory Permissions:"
+      # Check directory permissions
+      echo "=== Directory Permissions ==="
       ls -la /var/data/
-      stat -f "%A %N" /var/data || stat /var/data  # Show numeric permissions (works on both BSD and Linux)
+      id
+      whoami
+      groups
       echo "==========================="
       
       # Run migrations if needed

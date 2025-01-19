@@ -4,6 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
 import logging
+import stat
 import time
 import subprocess
 import sys
@@ -20,6 +21,34 @@ IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
 logger.info(f"Current working directory: {os.getcwd()}")
 logger.info(f"Python executable: {os.sys.executable}")
 logger.info(f"Process UID/GID: {os.getuid()}/{os.getgid()}")
+
+def check_directory_permissions(path):
+    """Check and log directory permissions and access"""
+    try:
+        st = os.stat(path)
+        logger.info(f"Directory owner UID/GID: {st.st_uid}/{st.st_gid}")
+        logger.info(f"Directory permissions: {oct(st.st_mode)[-3:]}")
+        logger.info(f"Read access: {os.access(path, os.R_OK)}")
+        logger.info(f"Write access: {os.access(path, os.W_OK)}")
+        logger.info(f"Execute access: {os.access(path, os.X_OK)}")
+    except Exception as e:
+        logger.error(f"Error checking permissions for {path}: {e}")
+
+def check_file_permissions(path):
+    """Check and log file permissions."""
+    try:
+        if path.exists():
+            st = os.stat(path)
+            logger.info(f"File exists. Size: {st.st_size} bytes")
+            logger.info(f"File permissions: {oct(st.st_mode)[-3:]}")
+            logger.info(f"UID/GID: {st.st_uid}/{st.st_gid}")
+            return True
+        else:
+            logger.error(f"File not found: {path}")
+            return False
+    except Exception as e:
+        logger.error(f"Error checking file permissions: {e}")
+        return False
 
 # Initialize DB_PATH and DATABASE_URL based on environment
 if ENV == "production" or IS_RENDER:
@@ -38,22 +67,29 @@ if os.getenv("DATABASE_URL"):
     DATABASE_URL = os.getenv("DATABASE_URL")
     logger.info("Using DATABASE_URL from environment variables")
 
+# Check directory status before trying to create
+if ENV == "production" or IS_RENDER:
+    logger.info("=== Checking /var/data directory ===")
+    check_directory_permissions("/var/data")
+    
+    # Check if directory exists
+    if not os.path.exists("/var/data"):
+        logger.error("Directory /var/data does not exist!")
+    else:
+        logger.info("Directory /var/data exists")
+
 # Ensure database directory exists
 try:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Ensured database directory exists: {DB_PATH.parent}")
+    if not DB_PATH.parent.exists():
+        logger.info(f"Directory {DB_PATH.parent} does not exist, attempting to create...")
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     
-    # Set directory permissions in production
-    if ENV == "production" or IS_RENDER:
-        os.chmod(DB_PATH.parent, 0o777)
-        logger.info(f"Set directory permissions to 777")
-    
-    # Log directory permissions
-    permissions = oct(DB_PATH.parent.stat().st_mode)[-3:]
-    logger.info(f"Directory permissions: {permissions}")
+    logger.info(f"Directory exists: {DB_PATH.parent}")
+    check_directory_permissions(DB_PATH.parent)
     
 except Exception as e:
     logger.error(f"Error with database directory: {e}")
+    logger.error("Will attempt to continue with existing permissions")
 
 # Log configuration
 logger.info("=== Database Configuration ===")
@@ -62,7 +98,6 @@ logger.info(f"Running on Render: {IS_RENDER}")
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Database Path (absolute): {DB_PATH.absolute()}")
 logger.info(f"Database directory exists: {DB_PATH.parent.exists()}")
-logger.info(f"Database directory is writable: {os.access(DB_PATH.parent, os.W_OK)}")
 logger.info("===========================")
 
 # Check if we can access the database directory
@@ -84,22 +119,6 @@ print("===========================\n")
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
 logger.info(f"Running on Render: {IS_RENDER}")
-
-def check_file_permissions(path):
-    """Check and log file and directory permissions."""
-    try:
-        if path.exists():
-            st = os.stat(path)
-            logger.info(f"File exists. Size: {st.st_size} bytes")
-            logger.info(f"File permissions: {oct(st.st_mode)[-3:]}")
-            logger.info(f"UID/GID: {st.st_uid}/{st.st_gid}")
-            return True
-        else:
-            logger.error(f"File not found: {path}")
-            return False
-    except Exception as e:
-        logger.error(f"Error checking file permissions: {e}")
-        return False
 
 def wait_for_db():
     """Wait for database file to be accessible."""
