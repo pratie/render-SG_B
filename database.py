@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from pathlib import Path
 import logging
 import time
+import subprocess
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +17,7 @@ ENV = os.getenv("ENV", "development")
 # Configure SQLite for different environments
 if ENV == "production":
     DB_PATH = Path("/data/reddit_analysis.db")
-    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:////{DB_PATH.absolute()}?mode=ro")  # Use read-only mode by default
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:////{DB_PATH.absolute()}?mode=ro")
 else:
     DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
@@ -28,23 +29,55 @@ logger.info(f"Database path: {DB_PATH}")
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
 
+def check_file_permissions():
+    """Check and log file and directory permissions."""
+    try:
+        if DB_PATH.exists():
+            # Log file permissions
+            result = subprocess.run(['ls', '-la', str(DB_PATH)], capture_output=True, text=True)
+            logger.info(f"Database file permissions:\n{result.stdout}")
+            
+            # Log parent directory permissions
+            result = subprocess.run(['ls', '-la', str(DB_PATH.parent)], capture_output=True, text=True)
+            logger.info(f"Parent directory permissions:\n{result.stdout}")
+            
+            # Try to get file stats
+            stats = DB_PATH.stat()
+            logger.info(f"File stats - mode: {oct(stats.st_mode)}, uid: {stats.st_uid}, gid: {stats.st_gid}")
+            return True
+    except Exception as e:
+        logger.error(f"Error checking permissions: {e}")
+    return False
+
 def wait_for_db():
     """Wait for database file to be accessible."""
     max_retries = 30
     retry_interval = 1
     
     for attempt in range(max_retries):
+        logger.info(f"Checking database file (attempt {attempt + 1}/{max_retries})...")
+        
+        # Check if file exists
         if DB_PATH.exists():
+            # Log permissions
+            check_file_permissions()
+            
             try:
-                # Try to open the file for reading (we don't need write access in production)
+                # Try to open the file for reading
                 with open(DB_PATH, 'rb') as f:
                     f.seek(0)  # Try to seek to verify readability
-                    logger.info(f"Database file is accessible at {DB_PATH}")
+                    logger.info(f"Successfully opened database file at {DB_PATH}")
                     return True
             except IOError as e:
                 logger.warning(f"Attempt {attempt + 1}/{max_retries}: Database file exists but not readable: {e}")
         else:
-            logger.warning(f"Attempt {attempt + 1}/{max_retries}: Waiting for database file")
+            logger.warning(f"Database file does not exist at {DB_PATH}")
+            # Check parent directory
+            if DB_PATH.parent.exists():
+                result = subprocess.run(['ls', '-la', str(DB_PATH.parent)], capture_output=True, text=True)
+                logger.info(f"Parent directory contents:\n{result.stdout}")
+            else:
+                logger.warning(f"Parent directory {DB_PATH.parent} does not exist")
         
         time.sleep(retry_interval)
     
@@ -94,6 +127,7 @@ def init_db():
     """Initialize the database and create all tables."""
     try:
         logger.info("Starting database initialization...")
+        logger.info(f"Current working directory: {os.getcwd()}")
         
         # Wait for database file to be accessible
         wait_for_db()

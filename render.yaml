@@ -5,19 +5,30 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Create data directory in the build directory
+      # Create and initialize database in build directory
       mkdir -p $HOME/data
       touch $HOME/data/reddit_analysis.db
       chmod 777 $HOME/data/reddit_analysis.db
-      # Set up the database
-      cp -r $HOME/data /opt/render/project/
-      PYTHONPATH=/opt/render/project/src DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db" alembic upgrade head
+      # Run migrations on the build database
+      export DATABASE_URL="sqlite:///$HOME/data/reddit_analysis.db"
+      PYTHONPATH=/opt/render/project/src alembic upgrade head
+      # Copy to project directory for persistence
+      mkdir -p /opt/render/project/data
+      cp $HOME/data/reddit_analysis.db /opt/render/project/data/
+      chmod 777 /opt/render/project/data/reddit_analysis.db
     startCommand: |
-      # Copy the initialized database to the mounted volume
+      # Ensure data directory exists
       mkdir -p /data
-      cp $HOME/data/reddit_analysis.db /data/
+      # Copy the database from project directory
+      cp -f /opt/render/project/data/reddit_analysis.db /data/
+      # Set permissions
       chmod 777 /data/reddit_analysis.db
+      # Debug info
+      echo "Listing /data directory:"
       ls -la /data
+      echo "Database file details:"
+      ls -la /data/reddit_analysis.db
+      # Start the application
       uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ENV
@@ -26,6 +37,8 @@ services:
         value: true
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: DATABASE_URL
+        value: sqlite:////data/reddit_analysis.db?mode=ro
     disk:
       name: sqlite-data
       mountPath: /data
