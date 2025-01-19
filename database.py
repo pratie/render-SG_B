@@ -54,7 +54,8 @@ def check_file_permissions(path):
 if ENV == "production" or IS_RENDER:
     # Always use absolute path in production
     DB_PATH = Path("/var/data/reddit_analysis.db").resolve()
-    DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}"
+    # Force 4 slashes for absolute path
+    DATABASE_URL = f"sqlite:////var/data/reddit_analysis.db"
     logger.info(f"Using production database on Render at {DB_PATH}")
 else:
     # Use relative path for local development
@@ -62,10 +63,12 @@ else:
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
     logger.info("Using local development database")
 
-# Override DATABASE_URL if explicitly provided in environment
-if os.getenv("DATABASE_URL"):
+# Override DATABASE_URL only if it's a complete URL (not just a path)
+if os.getenv("DATABASE_URL") and "sqlite:" in os.getenv("DATABASE_URL"):
     DATABASE_URL = os.getenv("DATABASE_URL")
     logger.info("Using DATABASE_URL from environment variables")
+else:
+    logger.info(f"Using configured DATABASE_URL: {DATABASE_URL}")
 
 # Check directory status before trying to create
 if ENV == "production" or IS_RENDER:
