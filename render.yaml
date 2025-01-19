@@ -35,17 +35,28 @@ services:
       echo "=== Setting up database directory ==="
       ls -la /var/data
       chmod 777 /var/data || echo "Cannot change permissions of /var/data"
-      touch /var/data/test_write || echo "Cannot write to /var/data"
-      rm -f /var/data/test_write
       echo "==========================="
       
-      # Initialize alembic if not already initialized
-      echo "=== Initializing Alembic ==="
-      if [ ! -f "/var/data/alembic.ini" ]; then
-        cp alembic.ini /var/data/alembic.ini
-        cp -r alembic /var/data/
-        echo "Copied alembic files to /var/data"
-      fi
+      # Create and set up database file
+      echo "=== Setting up database ==="
+      touch /var/data/reddit_analysis.db
+      chmod 666 /var/data/reddit_analysis.db
+      ls -la /var/data/reddit_analysis.db
+      echo "==========================="
+      
+      # Debug Python environment
+      echo "=== Python Environment ==="
+      which python
+      python --version
+      echo "PYTHONPATH: $PYTHONPATH"
+      pip list
+      echo "==========================="
+      
+      # Debug current directory
+      echo "=== Current Directory ==="
+      pwd
+      ls -la
+      echo "==========================="
       
       # Run database migrations
       echo "=== Running Database Migrations ==="
@@ -53,35 +64,33 @@ services:
       echo "Database URL: $DATABASE_URL"
       echo "Python Path: $PYTHONPATH"
       
-      # Initialize fresh database if needed
-      if [ ! -f "/var/data/reddit_analysis.db" ]; then
-        echo "Creating fresh database..."
-        touch /var/data/reddit_analysis.db
-        chmod 666 /var/data/reddit_analysis.db
-      fi
+      # Show migration files
+      echo "=== Migration Files ==="
+      ls -la alembic/versions/
+      cat alembic/versions/*.py
+      echo "==========================="
       
-      # Run migrations with retries
-      for i in {1..5}; do
-        echo "Migration attempt $i..."
-        if alembic upgrade head; then
-          echo "Migration successful!"
-          break
-        else
-          echo "Migration attempt $i failed. Checking database..."
-          ls -la /var/data/reddit_analysis.db
-          sqlite3 /var/data/reddit_analysis.db ".schema" || echo "Cannot access database"
-          sleep 2
-        fi
-      done
+      # Run migrations with debug output
+      echo "=== Running Migrations ==="
+      alembic upgrade head --sql || echo "Failed to generate SQL"
+      echo "=== Attempting migration ==="
+      alembic upgrade head || {
+        echo "Migration failed! Database status:"
+        sqlite3 /var/data/reddit_analysis.db ".tables"
+        sqlite3 /var/data/reddit_analysis.db ".schema"
+        echo "Migration history:"
+        alembic history
+        echo "Current revision:"
+        alembic current
+        exit 1
+      }
       
       # Verify database
-      echo "=== Database Status ==="
-      echo "Database file:"
-      ls -la /var/data/reddit_analysis.db
+      echo "=== Final Database Status ==="
       echo "Tables:"
-      sqlite3 /var/data/reddit_analysis.db ".tables" || echo "Cannot access database"
+      sqlite3 /var/data/reddit_analysis.db ".tables"
       echo "Schema:"
-      sqlite3 /var/data/reddit_analysis.db ".schema" || echo "Cannot access database"
+      sqlite3 /var/data/reddit_analysis.db ".schema"
       echo "==========================="
       
       # Start the application
