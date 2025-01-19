@@ -4,9 +4,12 @@ services:
     env: python
     buildCommand: |
       pip install -r requirements.txt
-      # Wait for disk mount to be ready
+      # Wait for disk mount
       while [ ! -d /data ]; do sleep 1; done
-      touch /data/reddit_analysis.db
+      # Set proper permissions
+      sudo chown -R 1000:1000 /data
+      sudo chmod -R 755 /data
+      # Initialize database
       alembic upgrade head
     startCommand: gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
     envVars:

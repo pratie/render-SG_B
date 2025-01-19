@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
 import logging
+import pathlib
 
 # Load environment variables
 load_dotenv()
@@ -13,9 +14,14 @@ ENV = os.getenv("ENV", "development")
 
 # Configure database URL based on environment
 if ENV == "production":
-    DATABASE_URL = "sqlite:////data/reddit_analysis.db"
+    DB_PATH = pathlib.Path("/data/reddit_analysis.db")
+    DATABASE_URL = f"sqlite:///{DB_PATH}"
 else:
+    DB_PATH = pathlib.Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
+
+# Ensure the database directory exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Configure SQLite to handle concurrent requests properly
 engine = create_engine(
@@ -42,8 +48,16 @@ def init_db():
     try:
         # Import models here to avoid circular imports
         from models import Base
+        
+        # Create an empty database file if it doesn't exist
+        if not DB_PATH.exists():
+            DB_PATH.touch()
+            if ENV == "production":
+                os.chmod(DB_PATH, 0o666)
+        
+        # Create all tables
         Base.metadata.create_all(bind=engine)
-        logging.info("Database initialized")
+        logging.info(f"Database initialized at {DB_PATH}")
     except Exception as e:
         logging.error(f"Error initializing database: {str(e)}")
         raise

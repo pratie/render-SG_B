@@ -25,9 +25,14 @@ ENV = os.getenv("ENV", "development")
 
 # Configure SQLite for different environments
 if ENV == "production":
-    DATABASE_URL = "sqlite:////data/reddit_analysis.db"
+    DB_PATH = Path("/data/reddit_analysis.db")
+    DATABASE_URL = f"sqlite:///{DB_PATH}"
 else:
+    DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
+
+# Ensure the database directory exists
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Override sqlalchemy.url with environment-specific configuration
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
@@ -63,29 +68,21 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # Special handling for SQLite
-    if DATABASE_URL.startswith("sqlite"):
-        # Ensure the database directory exists
-        db_path = DATABASE_URL.replace("sqlite:///", "")
-        if db_path.startswith("/"):  # Absolute path
-            os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        
-        engine_config = {
-            "sqlalchemy.url": DATABASE_URL,
-            "sqlalchemy.poolclass": str(pool.StaticPool.__name__),
-        }
-        
-        connectable = engine_from_config(
-            engine_config,
-            prefix="sqlalchemy.",
-            poolclass=pool.StaticPool,
-        )
-    else:
-        connectable = engine_from_config(
-            config.get_section(config.config_ini_section),
-            prefix="sqlalchemy.",
-            poolclass=pool.NullPool,
-        )
+    # Create an empty database file if it doesn't exist
+    if not DB_PATH.exists():
+        DB_PATH.touch()
+        if ENV == "production":
+            os.chmod(DB_PATH, 0o666)
+
+    # Configure the database connection
+    configuration = config.get_section(config.config_ini_section)
+    configuration["sqlalchemy.url"] = DATABASE_URL
+
+    connectable = engine_from_config(
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
     with connectable.connect() as connection:
         context.configure(
