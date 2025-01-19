@@ -22,14 +22,20 @@ config = context.config
 
 # Get environment (development or production)
 ENV = os.getenv("ENV", "development")
+IS_RENDER = os.getenv("RENDER", "false").lower() == "true"
+
+# Get DATABASE_URL from environment or set default
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Configure SQLite for different environments
-if ENV == "production":
-    DB_PATH = Path("/data/reddit_analysis.db")
-    DATABASE_URL = f"sqlite:///{DB_PATH}"
+if ENV == "production" or IS_RENDER:
+    if not DATABASE_URL:
+        DB_PATH = Path("/var/data/reddit_analysis.db")
+        DATABASE_URL = f"sqlite:////var/data/reddit_analysis.db"
 else:
-    DB_PATH = Path("./reddit_analysis.db")
-    DATABASE_URL = "sqlite:///./reddit_analysis.db"
+    if not DATABASE_URL:
+        DB_PATH = Path("./reddit_analysis.db")
+        DATABASE_URL = "sqlite:///./reddit_analysis.db"
 
 # Ensure the database directory exists
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
