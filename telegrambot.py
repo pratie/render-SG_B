@@ -129,12 +129,26 @@ async def get_stats():
             """)
             new_users = cursor.fetchall()
             
+            # Get recent logins
+            cursor.execute("""
+                SELECT email, last_login 
+                FROM users 
+                WHERE last_login IS NOT NULL
+                AND last_login > datetime('now', '-30 minute')
+                ORDER BY last_login DESC
+            """)
+            recent_logins = cursor.fetchall()
+            
             # Get basic stats
             cursor.execute("SELECT COUNT(*) as count FROM users")
             total_users = cursor.fetchone()['count']
             
             cursor.execute("SELECT COUNT(*) as count FROM users WHERE has_paid = 1")
             paid_users = cursor.fetchone()['count']
+            
+            # Get active projects count
+            cursor.execute("SELECT COUNT(DISTINCT brand_id) as count FROM reddit_mentions")
+            active_projects = cursor.fetchone()['count']
 
             # Get latest paid users with emails
             cursor.execute("""
@@ -156,10 +170,15 @@ async def get_stats():
 - New Users: {len(new_users)}
 {chr(10).join(f"  • {user['email']} (joined: {user['created_at']})" for user in new_users) if new_users else "  • No new users"}
 
+🔐 Recent Logins:
+- Active Users: {len(recent_logins)}
+{chr(10).join(f"  • {user['email']} (last login: {user['last_login']})" for user in recent_logins) if recent_logins else "  • No recent logins"}
+
 👥 Overall Statistics:
 - Total Users: {total_users:,}
 - Paid Users: {paid_users:,}
 - Conversion Rate: {conversion_rate}
+- Active Projects: {active_projects:,}
 
 💰 Recent Paid Conversions:
 {chr(10).join(f"  • {user['email']} (paid: {user['payment_date']})" for user in recent_paid_users) if recent_paid_users else "  • No recent paid users"}
