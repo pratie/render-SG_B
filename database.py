@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 import time
 import subprocess
+import sys
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +18,7 @@ ENV = os.getenv("ENV", "development")
 # Configure SQLite for different environments
 if ENV == "production":
     DB_PATH = Path("/data/reddit_analysis.db")
+    FALLBACK_DB_PATH = Path("/opt/render/project/data/reddit_analysis.db")
     DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:////{DB_PATH.absolute()}?mode=ro")
 else:
     DB_PATH = Path("./reddit_analysis.db")
@@ -29,24 +31,24 @@ logger.info(f"Database path: {DB_PATH}")
 logger.info(f"Database URL: {DATABASE_URL}")
 logger.info(f"Environment: {ENV}")
 
-def check_file_permissions():
+def check_file_permissions(path):
     """Check and log file and directory permissions."""
     try:
-        if DB_PATH.exists():
+        if path.exists():
             # Log file permissions
-            result = subprocess.run(['ls', '-la', str(DB_PATH)], capture_output=True, text=True)
-            logger.info(f"Database file permissions:\n{result.stdout}")
+            result = subprocess.run(['ls', '-la', str(path)], capture_output=True, text=True)
+            logger.info(f"File permissions for {path}:\n{result.stdout}")
             
             # Log parent directory permissions
-            result = subprocess.run(['ls', '-la', str(DB_PATH.parent)], capture_output=True, text=True)
-            logger.info(f"Parent directory permissions:\n{result.stdout}")
+            result = subprocess.run(['ls', '-la', str(path.parent)], capture_output=True, text=True)
+            logger.info(f"Parent directory permissions for {path}:\n{result.stdout}")
             
             # Try to get file stats
-            stats = DB_PATH.stat()
-            logger.info(f"File stats - mode: {oct(stats.st_mode)}, uid: {stats.st_uid}, gid: {stats.st_gid}")
+            stats = path.stat()
+            logger.info(f"File stats for {path} - mode: {oct(stats.st_mode)}, uid: {stats.st_uid}, gid: {stats.st_gid}")
             return True
     except Exception as e:
-        logger.error(f"Error checking permissions: {e}")
+        logger.error(f"Error checking permissions for {path}: {e}")
     return False
 
 def wait_for_db():
@@ -57,27 +59,42 @@ def wait_for_db():
     for attempt in range(max_retries):
         logger.info(f"Checking database file (attempt {attempt + 1}/{max_retries})...")
         
-        # Check if file exists
+        # First try primary path
         if DB_PATH.exists():
-            # Log permissions
-            check_file_permissions()
-            
+            logger.info(f"Found database at primary path: {DB_PATH}")
+            check_file_permissions(DB_PATH)
             try:
-                # Try to open the file for reading
                 with open(DB_PATH, 'rb') as f:
-                    f.seek(0)  # Try to seek to verify readability
+                    f.seek(0)
                     logger.info(f"Successfully opened database file at {DB_PATH}")
                     return True
             except IOError as e:
-                logger.warning(f"Attempt {attempt + 1}/{max_retries}: Database file exists but not readable: {e}")
+                logger.warning(f"Cannot read primary database: {e}")
         else:
-            logger.warning(f"Database file does not exist at {DB_PATH}")
-            # Check parent directory
-            if DB_PATH.parent.exists():
-                result = subprocess.run(['ls', '-la', str(DB_PATH.parent)], capture_output=True, text=True)
-                logger.info(f"Parent directory contents:\n{result.stdout}")
-            else:
-                logger.warning(f"Parent directory {DB_PATH.parent} does not exist")
+            logger.warning(f"Primary database path does not exist: {DB_PATH}")
+            
+            # In production, check fallback path
+            if ENV == "production" and FALLBACK_DB_PATH.exists():
+                logger.info(f"Checking fallback path: {FALLBACK_DB_PATH}")
+                check_file_permissions(FALLBACK_DB_PATH)
+                try:
+                    # Try to copy from fallback location
+                    subprocess.run(['cp', '-f', str(FALLBACK_DB_PATH), str(DB_PATH)], check=True)
+                    subprocess.run(['chmod', '777', str(DB_PATH)], check=True)
+                    logger.info("Successfully copied database from fallback location")
+                    continue  # Retry with the copied file
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"Failed to copy from fallback location: {e}")
+        
+        # Check parent directories
+        logger.info("Checking parent directories...")
+        if not DB_PATH.parent.exists():
+            logger.warning(f"Parent directory {DB_PATH.parent} does not exist")
+            try:
+                DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created parent directory {DB_PATH.parent}")
+            except Exception as e:
+                logger.error(f"Failed to create parent directory: {e}")
         
         time.sleep(retry_interval)
     
@@ -128,6 +145,8 @@ def init_db():
     try:
         logger.info("Starting database initialization...")
         logger.info(f"Current working directory: {os.getcwd()}")
+        logger.info(f"Python executable: {sys.executable}")
+        logger.info(f"Process UID/GID: {os.getuid()}/{os.getgid()}")
         
         # Wait for database file to be accessible
         wait_for_db()

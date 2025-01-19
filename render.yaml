@@ -5,31 +5,50 @@ services:
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
-      # Create and initialize database in build directory
-      mkdir -p $HOME/data
-      touch $HOME/data/reddit_analysis.db
-      chmod 777 $HOME/data/reddit_analysis.db
-      # Run migrations on the build database
-      export DATABASE_URL="sqlite:///$HOME/data/reddit_analysis.db"
-      PYTHONPATH=/opt/render/project/src alembic upgrade head
-      # Copy to project directory for persistence
+      # Initialize database in build directory
       mkdir -p /opt/render/project/data
-      cp $HOME/data/reddit_analysis.db /opt/render/project/data/
+      touch /opt/render/project/data/reddit_analysis.db
       chmod 777 /opt/render/project/data/reddit_analysis.db
+      # Run migrations
+      export DATABASE_URL="sqlite:////opt/render/project/data/reddit_analysis.db"
+      PYTHONPATH=/opt/render/project/src alembic upgrade head
     startCommand: |
-      # Ensure data directory exists
-      mkdir -p /data
-      # Copy the database from project directory
-      cp -f /opt/render/project/data/reddit_analysis.db /data/
-      # Set permissions
-      chmod 777 /data/reddit_analysis.db
+      # Wait for disk mount (max 60 seconds)
+      echo "Waiting for disk mount..."
+      COUNTER=0
+      while [ ! -d /data ] && [ $COUNTER -lt 60 ]; do
+        echo "Attempt $COUNTER: Waiting for /data directory..."
+        ls -la /
+        sleep 1
+        COUNTER=$((COUNTER + 1))
+      done
+
+      if [ ! -d /data ]; then
+        echo "Error: /data directory not mounted after 60 seconds"
+        exit 1
+      fi
+
+      echo "Data directory mounted. Setting up permissions..."
+      # Set up data directory
+      chmod 777 /data
+      
+      # Copy database if it doesn't exist
+      if [ ! -f /data/reddit_analysis.db ]; then
+        echo "Copying database to mounted volume..."
+        cp -f /opt/render/project/data/reddit_analysis.db /data/
+        chmod 777 /data/reddit_analysis.db
+      fi
+      
       # Debug info
-      echo "Listing /data directory:"
+      echo "Data directory contents:"
       ls -la /data
       echo "Database file details:"
-      ls -la /data/reddit_analysis.db
+      ls -la /data/reddit_analysis.db || echo "Warning: Database file not found"
+      echo "Process information:"
+      id
+      
       # Start the application
-      uvicorn main:app --host 0.0.0.0 --port $PORT
+      exec uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ENV
         value: production
