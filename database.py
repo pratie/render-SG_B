@@ -19,7 +19,7 @@ ENV = os.getenv("ENV", "development")
 # Configure SQLite for different environments
 if ENV == "production":
     DB_PATH = Path("/data/reddit_analysis.db")
-    DATABASE_URL = f"sqlite:///{DB_PATH}"
+    DATABASE_URL = f"sqlite:////{DB_PATH}?mode=rw"
 else:
     DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
@@ -28,34 +28,40 @@ else:
 if ENV == "development":
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# Log database configuration
+logger.info(f"Database path: {DB_PATH}")
+logger.info(f"Database URL: {DATABASE_URL}")
+logger.info(f"Environment: {ENV}")
+
 # Create SQLAlchemy engine with optimized settings for SQLite
 engine = create_engine(
     DATABASE_URL,
     connect_args={
         "check_same_thread": False,
-        "timeout": 30,  # 30 seconds timeout
+        "uri": True
     }
 )
 
 # Configure SQLite for better performance
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    # Use memory-efficient journal mode
-    cursor.execute("PRAGMA journal_mode=WAL")
-    # Limit cache size to 64MB
-    cursor.execute("PRAGMA cache_size=-65536")
-    # Enable memory-efficient page cache
-    cursor.execute("PRAGMA page_size=4096")
-    # Set busy timeout
-    cursor.execute("PRAGMA busy_timeout=30000")
-    cursor.close()
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.close()
+        logger.info("SQLite PRAGMA settings applied successfully")
+    except Exception as e:
+        logger.error(f"Error setting SQLite PRAGMA: {e}")
 
 SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
     bind=engine,
-    expire_on_commit=False  # Reduce memory usage
+    expire_on_commit=False
 )
 
 Base = declarative_base()
@@ -70,12 +76,21 @@ def get_db():
 def init_db():
     """Initialize the database and create all tables."""
     try:
+        logger.info("Starting database initialization...")
+        logger.info(f"Checking database path: {DB_PATH}")
+        
         # Import models here to avoid circular imports
         from models import Base
         
         # Create database tables
         Base.metadata.create_all(bind=engine)
-        logger.info(f"Database initialized successfully at {DB_PATH}")
+        logger.info("Database tables created successfully")
+        
+        # Verify database is writable
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
+            logger.info("Database connection test successful")
+            
     except Exception as e:
         logger.error(f"Error initializing database: {str(e)}")
         raise
