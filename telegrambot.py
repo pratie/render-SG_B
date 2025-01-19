@@ -11,12 +11,28 @@ from datetime import datetime
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Get Telegram credentials from environment variables
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+# Get environment
+ENV = os.getenv("ENV", "development")
+
+# Set database path based on environment
+if ENV == "production":
+    DB_PATH = "/data/reddit_analysis.db"
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DB_PATH = os.path.join(BASE_DIR, 'reddit_analysis.db')
+
+logger.info(f"Using database path: {DB_PATH}")
+logger.info(f"Environment: {ENV}")
 
 # Convert chat ID to integer and ensure it's positive
 try:
@@ -28,40 +44,58 @@ except (ValueError, TypeError):
 # Debug credentials (don't log the full token in production)
 logger.info(f"Bot token present: {'Yes' if TELEGRAM_BOT_TOKEN else 'No'}")
 logger.info(f"Chat ID present: {'Yes' if TELEGRAM_CHAT_ID else 'No'}")
-if TELEGRAM_BOT_TOKEN:
-    logger.info(f"Token length: {len(TELEGRAM_BOT_TOKEN)}")
-    logger.info(f"Token format correct: {':' in TELEGRAM_BOT_TOKEN}")
-if TELEGRAM_CHAT_ID:
-    logger.info(f"Using chat ID: {TELEGRAM_CHAT_ID}")
 
-# Database path - using absolute path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'reddit_analysis.db')
+async def get_db_connection():
+    """Get database connection with retry logic."""
+    max_retries = 3
+    retry_delay = 5  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            if not os.path.exists(DB_PATH):
+                logger.error(f"Database file not found at: {DB_PATH}")
+                if ENV == "production":
+                    logger.info("Checking Render disk mount...")
+                    logger.info(f"Directory contents of /data: {os.listdir('/data')}")
+                return None
+                
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row  # Enable row factory for named columns
+            return conn
+            
+        except sqlite3.Error as e:
+            logger.error(f"Database connection attempt {attempt + 1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Max retries reached. Could not connect to database.")
+                return None
 
 async def get_stats():
     """Get statistics from database."""
     try:
-        if not os.path.exists(DB_PATH):
-            logger.error(f"Database file not found at: {DB_PATH}")
+        conn = await get_db_connection()
+        if not conn:
             return None
 
-        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         try:
             # Get new users with their emails
             cursor.execute("""
-                SELECT email FROM users 
+                SELECT email, created_at FROM users 
                 WHERE created_at > datetime('now', '-30 minute')
                 ORDER BY created_at DESC
             """)
-            new_user_emails = cursor.fetchall()
+            new_users = cursor.fetchall()
             
             # Get basic stats
-            cursor.execute("SELECT COUNT(*) FROM users")
-            total_users = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM users WHERE has_paid = 1")
-            paid_users = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) as count FROM users")
+            total_users = cursor.fetchone()['count']
+            
+            cursor.execute("SELECT COUNT(*) as count FROM users WHERE has_paid = 1")
+            paid_users = cursor.fetchone()['count']
 
             # Get latest paid users with emails
             cursor.execute("""
@@ -73,19 +107,24 @@ async def get_stats():
             """)
             recent_paid_users = cursor.fetchall()
 
-            # Format message
-            message = f"""🔔 Database Update ({datetime.now().strftime('%H:%M')})
+            # Format message with more detailed information
+            message = f"""🔔 Database Update ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
 
-📊 Last 30 Minutes:
-- New Users: {len(new_user_emails)}
-  {chr(10).join(f"  • {email[0]}" for email in new_user_emails) if new_user_emails else "  • No new users"}
+📊 Last 30 Minutes Activity:
+- New Users: {len(new_users)}
+{chr(10).join(f"  • {user['email']} (joined: {user['created_at']})" for user in new_users) if new_users else "  • No new users"}
 
-👥 Overall Stats:
-- Total Users: {total_users}
-- Paid Users: {paid_users}
+👥 Overall Statistics:
+- Total Users: {total_users:,}
+- Paid Users: {paid_users:,}
+- Conversion Rate: {(paid_users/total_users)*100:.1f}% if total_users > 0 else "N/A"}
 
-💰 Recent Paid Users:
-{chr(10).join(f"  • {email} (paid on {payment_date})" for email, payment_date in recent_paid_users) if recent_paid_users else "  • No recent paid users"}
+💰 Recent Paid Conversions:
+{chr(10).join(f"  • {user['email']} (paid: {user['payment_date']})" for user in recent_paid_users) if recent_paid_users else "  • No recent paid users"}
+
+🔧 System Info:
+- Environment: {ENV}
+- Database: {DB_PATH}
 """
             return message
 
@@ -100,47 +139,60 @@ async def get_stats():
         return None
 
 async def send_telegram_message(message: str):
-    """Send message to Telegram."""
-    try:
-        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            logger.error("Missing Telegram credentials")
-            return
+    """Send message to Telegram with retry logic."""
+    max_retries = 3
+    retry_delay = 5  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+                logger.error("Missing Telegram credentials")
+                return
 
-        # Telegram API URL
-        telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        
-        # Send message
-        payload = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': message
-        }
-        
-        logger.info("Sending message to Telegram...")
-        response = requests.post(telegram_url, json=payload)
-        
-        if response.status_code == 200:
-            logger.info("Telegram alert sent successfully")
-        else:
-            logger.error(f"Failed to send Telegram alert. Status code: {response.status_code}")
-
-    except Exception as e:
-        logger.error(f"Error sending Telegram message: {str(e)}")
+            telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            
+            payload = {
+                'chat_id': TELEGRAM_CHAT_ID,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            
+            logger.info(f"Sending message to Telegram (attempt {attempt + 1})...")
+            response = requests.post(telegram_url, json=payload, timeout=10)
+            
+            if response.status_code == 200:
+                logger.info("Telegram alert sent successfully")
+                return
+            else:
+                logger.error(f"Failed to send Telegram alert. Status code: {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                
+        except Exception as e:
+            logger.error(f"Error sending Telegram message (attempt {attempt + 1}): {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
 
 async def send_alerts():
-    """Send alerts to Telegram."""
+    """Main function to send alerts to Telegram."""
     try:
-        # Get stats message
         stats = await get_stats()
         if stats:
-            # Send to Telegram
             await send_telegram_message(stats)
     except Exception as e:
         logger.error(f"Error in send_alerts: {str(e)}")
 
 def job():
-    asyncio.run(send_alerts())
+    """Wrapper function for the alert job."""
+    try:
+        asyncio.run(send_alerts())
+    except Exception as e:
+        logger.error(f"Critical error in job execution: {str(e)}")
 
 if __name__ == "__main__":
-    print("Starting alert service...")
-    # Run the job once when script is executed
+    logger.info(f"Starting alert service in {ENV} environment...")
     job()
