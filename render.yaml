@@ -6,19 +6,25 @@ services:
       pip install -r requirements.txt
       # Wait for disk mount and set up database
       while [ ! -d /data ]; do sleep 1; done
-      # Ensure database directory has correct permissions
+      # Set up data directory
+      sudo mkdir -p /data
       sudo chown -R 1000:1000 /data
-      sudo chmod -R 755 /data
-      # Create database file with proper permissions
+      sudo chmod -R 777 /data
+      # Create database file
       touch /data/reddit_analysis.db
-      chmod 666 /data/reddit_analysis.db
+      chmod 777 /data/reddit_analysis.db
       # Initialize database
-      alembic upgrade head
+      PYTHONPATH=/opt/render/project/src alembic upgrade head
     startCommand: |
-      # Ensure database is accessible
-      chmod 666 /data/reddit_analysis.db
       # Start the application
-      gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --worker-tmp-dir /dev/shm --max-requests 1000 --max-requests-jitter 50 --timeout 120
+      gunicorn main:app \
+        --workers 2 \
+        --worker-class uvicorn.workers.UvicornWorker \
+        --bind 0.0.0.0:$PORT \
+        --worker-tmp-dir /dev/shm \
+        --max-requests 1000 \
+        --max-requests-jitter 50 \
+        --timeout 120
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
