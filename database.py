@@ -36,8 +36,8 @@ if ENV == "production":
         print("===========================\n")
 else:
     # Development database
-    DB_PATH = Path("./reddit_analysis_dev.db")
-    DATABASE_URL = "sqlite:///./reddit_analysis_dev.db"
+    DB_PATH = Path("./reddit_analysis.db")
+    DATABASE_URL = "sqlite:///./reddit_analysis.db"
     # Ensure directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     print("\n=== Database Configuration ===")
