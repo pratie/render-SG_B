@@ -41,9 +41,14 @@ except (ValueError, TypeError):
     logger.error("Invalid chat ID format")
     TELEGRAM_CHAT_ID = None
 
-# Debug credentials (don't log the full token in production)
+# Debug credentials
 logger.info(f"Bot token present: {'Yes' if TELEGRAM_BOT_TOKEN else 'No'}")
 logger.info(f"Chat ID present: {'Yes' if TELEGRAM_CHAT_ID else 'No'}")
+if TELEGRAM_BOT_TOKEN:
+    logger.info(f"Token length: {len(TELEGRAM_BOT_TOKEN)}")
+    logger.info(f"Token format correct: {':' in TELEGRAM_BOT_TOKEN}")
+if TELEGRAM_CHAT_ID:
+    logger.info(f"Using chat ID: {TELEGRAM_CHAT_ID}")
 
 async def get_db_connection():
     """Get database connection with retry logic."""
@@ -60,7 +65,7 @@ async def get_db_connection():
                 return None
                 
             conn = sqlite3.connect(DB_PATH)
-            conn.row_factory = sqlite3.Row  # Enable row factory for named columns
+            conn.row_factory = sqlite3.Row
             return conn
             
         except sqlite3.Error as e:
@@ -107,7 +112,10 @@ async def get_stats():
             """)
             recent_paid_users = cursor.fetchall()
 
-            # Format message with more detailed information
+            # Calculate conversion rate safely
+            conversion_rate = f"{(paid_users/total_users)*100:.1f}%" if total_users > 0 else "N/A"
+
+            # Format message
             message = f"""🔔 Database Update ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})
 
 📊 Last 30 Minutes Activity:
@@ -117,15 +125,15 @@ async def get_stats():
 👥 Overall Statistics:
 - Total Users: {total_users:,}
 - Paid Users: {paid_users:,}
-- Conversion Rate: {(paid_users/total_users)*100:.1f}% if total_users > 0 else "N/A"}
+- Conversion Rate: {conversion_rate}
 
 💰 Recent Paid Conversions:
 {chr(10).join(f"  • {user['email']} (paid: {user['payment_date']})" for user in recent_paid_users) if recent_paid_users else "  • No recent paid users"}
 
 🔧 System Info:
 - Environment: {ENV}
-- Database: {DB_PATH}
-"""
+- Database: {DB_PATH}"""
+
             return message
 
         except sqlite3.Error as e:
@@ -139,9 +147,10 @@ async def get_stats():
         return None
 
 async def send_telegram_message(message: str):
-    """Send message to Telegram with retry logic."""
+    """Send message to Telegram with retry logic and timeout."""
     max_retries = 3
     retry_delay = 5  # seconds
+    timeout = 30  # seconds
     
     for attempt in range(max_retries):
         try:
@@ -158,7 +167,15 @@ async def send_telegram_message(message: str):
             }
             
             logger.info(f"Sending message to Telegram (attempt {attempt + 1})...")
-            response = requests.post(telegram_url, json=payload, timeout=10)
+            
+            # Use a session for better connection handling
+            with requests.Session() as session:
+                response = session.post(
+                    telegram_url,
+                    json=payload,
+                    timeout=timeout,
+                    verify=True  # Ensure SSL verification
+                )
             
             if response.status_code == 200:
                 logger.info("Telegram alert sent successfully")
@@ -167,15 +184,16 @@ async def send_telegram_message(message: str):
                 logger.error(f"Failed to send Telegram alert. Status code: {response.status_code}")
                 logger.error(f"Response: {response.text}")
                 
-            if attempt < max_retries - 1:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-                
-        except Exception as e:
-            logger.error(f"Error sending Telegram message (attempt {attempt + 1}): {str(e)}")
-            if attempt < max_retries - 1:
-                logger.info(f"Retrying in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout error on attempt {attempt + 1}")
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Connection error on attempt {attempt + 1}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error on attempt {attempt + 1}: {str(e)}")
+        
+        if attempt < max_retries - 1:
+            logger.info(f"Retrying in {retry_delay} seconds...")
+            await asyncio.sleep(retry_delay)
 
 async def send_alerts():
     """Main function to send alerts to Telegram."""
