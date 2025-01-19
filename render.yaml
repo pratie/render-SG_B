@@ -30,16 +30,16 @@ services:
       export RENDER=true
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       
-      # Check directory permissions
-      echo "=== Directory Permissions ==="
-      ls -la /var/data/
-      id
-      whoami
-      groups
-      echo "==========================="
+      # Run database migrations
+      echo "=== Running Database Migrations ==="
+      export PYTHONPATH=/opt/render/project/src
+      alembic upgrade head || echo "Warning: Migration failed!"
+      echo "=== Migration Complete ==="
       
-      # Run migrations if needed
-      PYTHONPATH=/opt/render/project/src alembic upgrade head
+      # Check database
+      echo "=== Database Status ==="
+      sqlite3 /var/data/reddit_analysis.db ".tables"
+      echo "==========================="
       
       # Start the application
       exec uvicorn main:app --host 0.0.0.0 --port $PORT
