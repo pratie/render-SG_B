@@ -20,7 +20,12 @@ if ENV == "production":
     # Use DATABASE_URL from environment if set
     DATABASE_URL = os.getenv("DATABASE_URL")
     if DATABASE_URL:
-        logger.info(f"Using DATABASE_URL from environment: {DATABASE_URL}")
+        print("\n=== Database Configuration ===")
+        print(f"Environment: Production")
+        print(f"Database URL: {DATABASE_URL}")
+        print("===========================\n")
+        logger.info(f"Database URL: {DATABASE_URL}")
+        logger.info(f"Environment: {ENV}")
     else:
         # Fallback to default paths
         PRIMARY_DB_PATH = Path("/data/reddit_analysis.db")
@@ -30,20 +35,30 @@ if ENV == "production":
         if PRIMARY_DB_PATH.exists() and os.access(str(PRIMARY_DB_PATH), os.R_OK):
             DB_PATH = PRIMARY_DB_PATH
             DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}?mode=ro"
+            print("\n=== Database Configuration ===")
+            print(f"Environment: Production")
+            print(f"Using Primary Database Path: {DB_PATH}")
+            print("===========================\n")
+            logger.info(f"Using database path: {DB_PATH}")
         else:
             DB_PATH = FALLBACK_DB_PATH
             DATABASE_URL = f"sqlite:////{DB_PATH.absolute()}"
-        
-        logger.info(f"Using database path: {DB_PATH}")
+            print("\n=== Database Configuration ===")
+            print(f"Environment: Production")
+            print(f"Using Fallback Database Path: {DB_PATH}")
+            print("===========================\n")
+            logger.info(f"Using database path: {DB_PATH}")
 else:
     DB_PATH = Path("./reddit_analysis.db")
     DATABASE_URL = "sqlite:///./reddit_analysis.db"
     # In development, ensure directory exists
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-# Log database configuration
-logger.info(f"Database URL: {DATABASE_URL}")
-logger.info(f"Environment: {ENV}")
+    print("\n=== Database Configuration ===")
+    print(f"Environment: Development")
+    print(f"Database Path: {DB_PATH}")
+    print("===========================\n")
+    logger.info(f"Database URL: {DATABASE_URL}")
+    logger.info(f"Environment: {ENV}")
 
 def check_file_permissions(path):
     """Check and log file and directory permissions."""

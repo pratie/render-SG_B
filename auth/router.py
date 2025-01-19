@@ -4,12 +4,18 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
 
-from database import get_db
+from database import get_db, DATABASE_URL
 from crud import UserCRUD
 from . import config
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
+
+def get_db_path():
+    """Extract database path from DATABASE_URL"""
+    if DATABASE_URL.startswith('sqlite:////'):
+        return DATABASE_URL[10:].split('?')[0]
+    return DATABASE_URL[9:].split('?')[0]
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -23,6 +29,10 @@ async def get_current_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
+    print("\n=== User Authenticated ===")
+    print(f"Email: {email}")
+    print(f"Database: {get_db_path()}")
+    print("=========================\n")
     return email
 
 @router.post("/google-login", tags=["authentication"])
@@ -39,8 +49,16 @@ async def google_login(
         user = UserCRUD.get_user_by_email(db, email)
         if not user:
             user = UserCRUD.create_user(db, email)
+            print("\n=== New User Created ===")
+            print(f"Email: {email}")
+            print(f"Database: {get_db_path()}")
+            print("=====================\n")
         else:
             UserCRUD.update_last_login(db, email)
+            print("\n=== User Login ===")
+            print(f"Email: {email}")
+            print(f"Database: {get_db_path()}")
+            print("=================\n")
         
         # Create access token
         access_token = config.create_access_token(email)
@@ -52,6 +70,9 @@ async def google_login(
         }
     
     except Exception as e:
+        print(f"\n=== Login Error ===")
+        print(f"Error: {str(e)}")
+        print("=================\n")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
@@ -69,8 +90,16 @@ async def test_login(
         user = UserCRUD.get_user_by_email(db, email)
         if not user:
             user = UserCRUD.create_user(db, email)
+            print("\n=== New Test User Created ===")
+            print(f"Email: {email}")
+            print(f"Database: {get_db_path()}")
+            print("=========================\n")
         else:
             UserCRUD.update_last_login(db, email)
+            print("\n=== Test User Login ===")
+            print(f"Email: {email}")
+            print(f"Database: {get_db_path()}")
+            print("====================\n")
         
         # Create access token
         access_token = config.create_access_token(email)
@@ -82,6 +111,9 @@ async def test_login(
         }
     
     except Exception as e:
+        print(f"\n=== Test Login Error ===")
+        print(f"Error: {str(e)}")
+        print("=====================\n")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
