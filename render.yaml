@@ -12,13 +12,19 @@ services:
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       export PYTHONPATH=/opt/render/project/src
       
-      # Ensure we're in the right directory
       cd /opt/render/project/src
       
       echo "=== Environment Setup ==="
       echo "Current directory: $(pwd)"
       echo "Python path: $PYTHONPATH"
       echo "Database URL: $DATABASE_URL"
+      echo "==========================="
+      
+      echo "=== Disk Mount Check ==="
+      echo "Disk contents:"
+      ls -la /var/data/
+      echo "Disk permissions:"
+      getfacl /var/data/
       echo "==========================="
       
       echo "=== Database Status Before Migration ==="
@@ -45,6 +51,9 @@ services:
       echo "Schema after migration:"
       sqlite3 /var/data/reddit_analysis.db ".schema"
       echo "==========================="
+      
+      # Ensure database is readable by worker
+      chmod 666 /var/data/reddit_analysis.db
       
       exec uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -76,8 +85,35 @@ services:
       export PYTHONPATH=/opt/render/project/src
       
       cd /opt/render/project/src
+      
+      echo "=== Worker Environment Setup ==="
+      echo "Current directory: $(pwd)"
+      echo "Python path: $PYTHONPATH"
+      echo "Database URL: $DATABASE_URL"
+      
+      echo "=== Disk Mount Check ==="
+      echo "Disk contents:"
+      ls -la /var/data/
+      echo "Disk permissions:"
+      getfacl /var/data/
+      
+      echo "=== Database Access Check ==="
+      echo "Database exists:"
+      test -f /var/data/reddit_analysis.db && echo "Yes" || echo "No"
+      echo "Database permissions:"
+      ls -la /var/data/reddit_analysis.db
+      echo "Database readable:"
+      test -r /var/data/reddit_analysis.db && echo "Yes" || echo "No"
+      echo "==========================="
+      
+      # Add a small delay to ensure web service is fully initialized
+      sleep 10
+      
       while true; do
+        echo "=== Starting Telegram Bot Run ==="
+        date
         python telegrambot.py
+        echo "=== Finished Telegram Bot Run ==="
         echo "Sleeping for 30 minutes..."
         sleep 1800
       done
@@ -97,6 +133,6 @@ services:
       - key: TELEGRAM_CHAT_ID
         sync: false
     disk:
-      name: sqlite-data
+      name: sqlite-data  # Same disk as web service
       mountPath: /var/data
       sizeGB: 1

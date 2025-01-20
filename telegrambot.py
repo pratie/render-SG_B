@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import logging
 from pathlib import Path
 from datetime import datetime
+import shutil
 
 # Load environment variables
 load_dotenv()
@@ -26,8 +27,27 @@ ENV = os.getenv("ENV", "development")
 
 # Set database path based on environment
 if ENV == "production":
-    PRIMARY_DB_PATH = Path("/var/data/reddit_analysis.db")  # Match the web service path
+    PRIMARY_DB_PATH = Path("/var/data/reddit_analysis.db")
     FALLBACK_DB_PATH = Path("/opt/render/project/src/reddit_analysis.db") 
+    
+    # Enhanced debugging for disk and database access
+    logger.info("=== Checking Disk Mount ===")
+    try:
+        logger.info(f"Contents of /var/data:")
+        logger.info(os.listdir('/var/data'))
+        
+        # Check disk space
+        total, used, free = shutil.disk_usage("/var/data")
+        logger.info(f"Disk space - Total: {total // (2**30)}GB, Used: {used // (2**30)}GB, Free: {free // (2**30)}GB")
+    except Exception as e:
+        logger.error(f"Error accessing /var/data: {e}")
+
+    logger.info("=== Database Path Check ===")
+    logger.info(f"Primary path exists: {PRIMARY_DB_PATH.exists()}")
+    logger.info(f"Primary path readable: {os.access(str(PRIMARY_DB_PATH), os.R_OK)}")
+    logger.info(f"Primary path writable: {os.access(str(PRIMARY_DB_PATH), os.W_OK)}")
+    logger.info(f"Fallback path exists: {FALLBACK_DB_PATH.exists()}")
+    logger.info(f"Fallback path readable: {os.access(str(FALLBACK_DB_PATH), os.R_OK)}")
     
     # Check which path to use
     if PRIMARY_DB_PATH.exists() and os.access(str(PRIMARY_DB_PATH), os.R_OK):
@@ -36,11 +56,20 @@ if ENV == "production":
     else:
         DB_PATH = str(FALLBACK_DB_PATH)
         logger.info("Using fallback database path")
+        
+    # Log file permissions
+    try:
+        if PRIMARY_DB_PATH.exists():
+            st = os.stat(str(PRIMARY_DB_PATH))
+            logger.info(f"Primary DB permissions: {oct(st.st_mode)[-3:]}")
+            logger.info(f"Primary DB UID/GID: {st.st_uid}/{st.st_gid}")
+    except Exception as e:
+        logger.error(f"Error checking primary DB permissions: {e}")
 else:
     DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reddit_analysis.db')
     logger.info("Using development database")
 
-logger.info(f"Using database path: {DB_PATH}")
+logger.info(f"Final database path: {DB_PATH}")
 logger.info(f"Environment: {ENV}")
 
 # Convert chat ID to integer and ensure it's positive
@@ -67,6 +96,22 @@ def check_db_path():
             logger.info(f"Database file exists. Size: {st.st_size} bytes")
             logger.info(f"File permissions: {oct(st.st_mode)[-3:]}")
             logger.info(f"UID/GID: {st.st_uid}/{st.st_gid}")
+            
+            # Test file operations
+            logger.info("Testing file operations...")
+            try:
+                with open(DB_PATH, 'rb') as f:
+                    _ = f.read(1)
+                logger.info("File is readable")
+                # Test SQLite connection
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
+                logger.info("SQLite connection test successful")
+            except Exception as e:
+                logger.error(f"Database access test failed: {e}")
+            
             return True
         else:
             logger.error(f"Database file not found at: {DB_PATH}")
@@ -121,6 +166,8 @@ async def get_stats():
         cursor = conn.cursor()
 
         try:
+            logger.info("=== Executing Database Queries ===")
+            
             # Get new users with their emails
             cursor.execute("""
                 SELECT email, created_at FROM users 
@@ -128,6 +175,7 @@ async def get_stats():
                 ORDER BY created_at DESC
             """)
             new_users = cursor.fetchall()
+            logger.info(f"Found {len(new_users)} new users")
             
             # Get recent logins
             cursor.execute("""
@@ -138,6 +186,7 @@ async def get_stats():
                 ORDER BY last_login DESC
             """)
             recent_logins = cursor.fetchall()
+            logger.info(f"Found {len(recent_logins)} recent logins")
             
             # Get basic stats
             cursor.execute("SELECT COUNT(*) as count FROM users")
@@ -159,6 +208,8 @@ async def get_stats():
                 LIMIT 5
             """)
             recent_paid_users = cursor.fetchall()
+
+            logger.info("=== Database Queries Completed ===")
 
             # Calculate conversion rate safely
             conversion_rate = f"{(paid_users/total_users)*100:.1f}%" if total_users > 0 else "N/A"
@@ -260,12 +311,15 @@ async def send_alerts():
 def job():
     """Wrapper function for the alert job."""
     try:
+        logger.info("=== Starting Alert Job ===")
         asyncio.run(send_alerts())
+        logger.info("=== Alert Job Completed ===")
     except Exception as e:
         logger.error(f"Critical error in job execution: {str(e)}")
 
 if __name__ == "__main__":
-    logger.info(f"Starting alert service in {ENV} environment...")
+    logger.info(f"=== Starting Alert Service ===")
+    logger.info(f"Environment: {ENV}")
     # Check database path before starting
     if check_db_path():
         job()
