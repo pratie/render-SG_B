@@ -26,10 +26,8 @@ services:
       echo "==========================="
       
       echo "=== Running Migrations ==="
-      # Force remove any existing alembic_version table to ensure clean migration
       sqlite3 /var/data/reddit_analysis.db "DROP TABLE IF EXISTS alembic_version;"
       
-      # Run migrations
       PYTHONPATH=/opt/render/project/src alembic upgrade head || {
         echo "Migration failed! Checking database state..."
         echo "Database permissions:"
@@ -48,7 +46,6 @@ services:
       sqlite3 /var/data/reddit_analysis.db ".schema"
       echo "==========================="
       
-      # Start the application
       exec uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ENV
@@ -66,10 +63,9 @@ services:
       mountPath: /var/data
       sizeGB: 1
 
-  - type: cron
-    name: reddit-tracker-alerts
+  - type: worker
+    name: reddit-tracker-worker
     env: python
-    schedule: "*/30 * * * *"  # Runs every 30 minutes
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
@@ -80,7 +76,11 @@ services:
       export PYTHONPATH=/opt/render/project/src
       
       cd /opt/render/project/src
-      python telegrambot.py
+      while true; do
+        python telegrambot.py
+        echo "Sleeping for 30 minutes..."
+        sleep 1800
+      done
     envVars:
       - key: ENV
         value: production
@@ -93,10 +93,10 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: TELEGRAM_BOT_TOKEN
-        sync: false  # Add this in Render dashboard
+        sync: false
       - key: TELEGRAM_CHAT_ID
-        sync: false  # Add this in Render dashboard
+        sync: false
     disk:
-      name: sqlite-data  # Same disk name as web service
+      name: sqlite-data
       mountPath: /var/data
       sizeGB: 1
