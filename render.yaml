@@ -74,57 +74,43 @@ services:
       python -m pip install --upgrade pip
       pip install -r requirements.txt
     startCommand: |
-      # Create required directories
-      mkdir -p /var/data
-      
-      echo "=== Environment Setup ==="
+      # Wait for disk mount (up to 30 seconds)
+      for i in {1..30}; do
+        if [ -d "/var/data" ]; then
+          echo "Disk mounted successfully"
+          break
+        fi
+        echo "Waiting for disk mount... ($i/30)"
+        sleep 1
+      done
+
+      # Verify disk mount
+      if [ ! -d "/var/data" ]; then
+        echo "ERROR: Disk mount failed"
+        exit 1
+      fi
+
+      # Set environment variables
       export ENV=production
       export RENDER=true
       export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
       export PYTHONPATH=/opt/render/project/src
       
-      echo "=== Disk Mount Check ==="
-      echo "Disk contents:"
-      ls -la /var/data/
-      echo "Disk permissions:"
-      getfacl /var/data/
-      echo "==========================="
-      
-      echo "=== Database Access Check ==="
-      echo "Database exists:"
-      test -f /var/data/reddit_analysis.db && echo "Yes" || echo "No"
-      echo "Database permissions:"
-      ls -la /var/data/reddit_analysis.db
-      echo "Database readable:"
-      test -r /var/data/reddit_analysis.db && echo "Yes" || echo "No"
-      echo "==========================="
-      
       cd /opt/render/project/src
       
-      echo "Starting continuous monitoring at $(date)"
+      # Debug disk mount
+      echo "=== Disk Mount Status ==="
+      df -h /var/data
+      ls -la /var/data/
+      echo "======================="
+      
+      # Run in continuous loop
       while true; do
-        echo "=== Starting Telegram Bot Run ==="
-        date
+        echo "Starting telegram bot run at $(date)"
         python telegrambot.py
-        echo "=== Finished Telegram Bot Run ==="
-        echo "Sleeping for 30 minutes (1800 seconds)..."
+        echo "Sleeping for 30 minutes..."
         sleep 1800
       done
-    envVars:
-      - key: ENV
-        value: production
-      - key: RENDER
-        value: "true"
-      - key: DATABASE_URL
-        value: sqlite:////var/data/reddit_analysis.db
-      - key: PYTHONUNBUFFERED
-        value: "true"
-      - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
     disk:
       name: sqlite-data
       mountPath: /var/data
