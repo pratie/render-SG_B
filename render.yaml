@@ -66,3 +66,61 @@ services:
       name: sqlite-data
       mountPath: /var/data
       sizeGB: 1
+
+  - type: worker
+    name: reddit-analytics-worker
+    env: python
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: |
+      # Wait for disk mount and web service to be ready
+      for i in {1..30}; do
+        if [ -f "/var/data/reddit_analysis.db" ]; then
+          echo "Database found and disk mounted successfully"
+          break
+        fi
+        echo "Waiting for database... ($i/30)"
+        sleep 1
+      done
+
+      # Set environment
+      export ENV=production
+      export RENDER=true
+      export DATABASE_URL="sqlite:////var/data/reddit_analysis.db"
+      export PYTHONPATH=/opt/render/project/src
+      
+      cd /opt/render/project/src
+      
+      echo "=== Disk Status ==="
+      ls -la /var/data/
+      echo "Database file:"
+      ls -la /var/data/reddit_analysis.db
+      echo "=================="
+      
+      # Run continuously
+      while true; do
+        echo "=== Starting Analytics Run at $(date) ==="
+        python telegrambot.py
+        echo "=== Analytics Complete - Sleeping for 30 minutes ==="
+        sleep 1800
+      done
+    envVars:
+      - key: ENV
+        value: production
+      - key: RENDER
+        value: "true"
+      - key: DATABASE_URL
+        value: sqlite:////var/data/reddit_analysis.db
+      - key: PYTHONUNBUFFERED
+        value: "true"
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+    disk:
+      name: sqlite-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -4,7 +4,7 @@ import pandas as pd
 import sqlite3
 
 def show_data():
-    conn = sqlite3.connect('reddit_analysis.db')
+    conn = sqlite3.connect('reddit_analysis_backup.db')
     
     st.title("Database Data")
 
