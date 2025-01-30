@@ -143,8 +143,8 @@ async def verify_subreddit(subreddit_name: str) -> bool:
 def get_keywords(brand_name: str, description: str) -> list[str]:
     """Generate 5-10 relevant keywords for finding Reddit posts"""
     try:
-        prompt = f"""Given a brand/project named '{brand_name}' with description '{description}', 
-        suggest 5-10 relevant keywords for finding related discussions. Return only the keywords, 
+        prompt = f"""Act as a senior SEO specialist and Reddit community analyst. Given a brand/project named '{brand_name}' with description '{description}', 
+        suggest 10-15 relevant keywords for finding related discussions. Return only the keywords, 
         one per line, without any additional text."""
         
         response = anthropic_client.messages.create(
