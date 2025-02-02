@@ -288,7 +288,7 @@ async def generate_custom_comment(
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=150,
+            max_tokens=120,
             temperature=0.9,  # Higher temp for more natural hesitation
             system=system_message,
             messages=[
