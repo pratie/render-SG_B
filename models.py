@@ -290,3 +290,12 @@ class BrandResponse(BaseModel):
             
             return cls(**data)
         return cls(**obj)
+
+class CommentInput(BaseModel):
+    post_title: str
+    post_content: str
+    brand_id: int
+    include_experience: bool = True
+
+class CommentResponse(BaseModel):
+    comment: str

@@ -30,7 +30,7 @@ from crud import UserCRUD, BrandCRUD, RedditMentionCRUD
 from models import (
     User, Brand, RedditMention, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
-    KeywordResponse, RedditMentionResponse
+    KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse
 )
 from auth.router import router as auth_router, get_current_user
 from routers.payment import router as payment_router
@@ -781,6 +781,120 @@ async def get_brand_mentions(
     except Exception as e:
         logging.error(f"Error getting mentions: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10)
+)
+async def generate_custom_comment(
+    post_title: str,
+    post_content: str,
+    brand_id: int,
+    include_experience: bool,
+    db: Session
+) -> str:
+    """Generate custom AI response based on specified parameters"""
+    logging.info(f"Starting comment generation for brand_id: {brand_id}")
+    logging.info(f"Post title: {post_title}")
+    
+    try:
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
+        if not brand:
+            logging.error(f"Brand not found: {brand_id}")
+            raise ValueError(f"Brand with id {brand_id} not found")
+        
+        brand_name = brand.name
+        knowledge_base = brand.description
+        
+        logging.info(f"Found brand: {brand_name}")
+
+        system_message = f"""
+        You are a knowledgeable user discussing the product/service: {brand_name}.
+        
+        Key Rules:
+        1. Never identify as a marketer or brand representative
+        2. Don't use marketing language or seem overly promotional
+        3. Don't make claims that aren't supported by the knowledge base
+        4. Be helpful and informative
+        5. Write in a casual, friendly manner
+        6. Use informal language and conversational tone
+        7. Write in lowercase to match reddit's style
+        8. {"Share personal experience and anecdotes" if include_experience else "Focus on general information without personal anecdotes"}
+        """
+
+        prompt = f"""
+        CONTEXT:
+        Knowledge Base (information about our product/service):
+        {knowledge_base}
+
+        TASK:
+        Post Title: {post_title}
+        Post Content: {post_content}
+
+        Generate a helpful response that sounds natural and authentic.
+        """
+
+        logging.info("Sending request to Anthropic API")
+        response = anthropic_client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=1000,
+            temperature=0.7,
+            system=system_message,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        logging.info("Received response from Anthropic API")
+        
+        if not response or not response.content or len(response.content) == 0:
+            logging.error("Empty response from Anthropic API")
+            return "Sorry, I couldn't generate a response at this time."
+            
+        comment = response.content[0].text.strip()
+        logging.info(f"Generated comment length: {len(comment)}")
+        
+        return comment
+        
+    except Exception as e:
+        logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
+        return "Sorry, I'm having trouble generating a response right now."
+
+@app.post("/generate-custom-comment/", response_model=CommentResponse)
+async def generate_comment_endpoint(
+    comment_input: CommentInput,
+    request: Request,
+    current_user_email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a custom comment for a Reddit post.
+    Requires authentication.
+    """
+    logging.info(f"Received comment generation request from user: {current_user_email}")
+    
+    try:
+        comment = await generate_custom_comment(
+            post_title=comment_input.post_title,
+            post_content=comment_input.post_content,
+            brand_id=comment_input.brand_id,
+            include_experience=comment_input.include_experience,
+            db=db
+        )
+        
+        if not comment:
+            logging.error("Empty comment generated")
+            raise HTTPException(status_code=500, detail="Failed to generate comment")
+            
+        logging.info("Successfully generated comment")
+        return CommentResponse(comment=comment)
+        
+    except ValueError as ve:
+        logging.error(f"ValueError in generate_comment_endpoint: {str(ve)}")
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        logging.error(f"Error in generate_comment_endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error generating comment")
 
 if __name__ == "__main__":
     import uvicorn
