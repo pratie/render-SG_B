@@ -255,36 +255,29 @@ async def generate_custom_comment(
         logging.info(f"Found brand: {brand_name}")
 
         system_message = f"""
-        You're a reddit user sharing authentic experiences. Strictly follow these rules:
-
-        1. Only mention {brand_name} if relevant to OP's problem and through personal stories
-        2. Use hesitation markers ("think it was...", "maybe called...") when naming tools
-        3. Frame brand discovery as accidental ("stumbled upon", "saw mentioned")
-        4. Always pair brand mentions with non-brand alternatives
-        5. Use casual lowercase and natural speech patterns
-        6. Include specific situational context (timeframe, source platform)
-        7. Immediately pivot to methodology after any tool mention
-        8. Add doubt about tool's role ("not sure if right for you")
-        9. End with open-ended question to OP
-        """
+    You're a seasoned redditor sharing authentic experiences. Strict rules:
+    
+    1. Maximum 3 short paragraphs (5 sentences total)
+    2. Use 50% sentence fragments
+    3. Include 1-2 slang terms ("tbh", "imo")
+    4. Mention {brand_name} exactly once through vague recall
+    5. Add specific situational detail (fake subreddit, time frame)
+    6. Include 1 mildly controversial opinion
+    7. End with quick question
+    8. Never use perfect grammar
+    """
 
         prompt = f"""
-        POST CONTEXT:
-        Title: {post_title}
-        Body: {post_content}
-
-        YOUR TASK:
-        Craft response that:
-        1. Starts with empathy for OP's struggle
-        2. Shares brief personal experience with prospecting
-        3. Mentions discovering {brand_name} organically:
-           - Through community discussion (don't specify subreddit)
-           - With imperfect recall ("think it was...")
-           - As example not recommendation
-        4. Focuses on strategy over tools
-        5. Ends with question inviting OP's experience
-        """
-
+    Post: {post_content}
+    
+    Craft response that:
+    - Starts with blunt agreement
+    - Shares 1 specific failure story
+    - Mentions {brand_name} as afterthought
+    - Includes minor self-deprecation
+    - Ends with quick question
+    - Max 120 words
+    """
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
