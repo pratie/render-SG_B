@@ -13,6 +13,7 @@ import asyncpraw
 import asyncprawcore
 import prawcore
 import praw
+import re
 from dotenv import load_dotenv
 import time
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -231,97 +232,88 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10)
 )
-
-async def generate_comment(post_title: str, post_content: str, brand_id: int, db: Session) -> tuple[str, int]:
-    """Generate AI response with retry logic"""
-    brand_name = db.query(Brand).filter(Brand.id == brand_id).first().name
+async def generate_custom_comment(
+    post_title: str,
+    post_content: str,
+    brand_id: int,
+    include_experience: bool,
+    db: Session
+) -> str:
+    """Generate custom AI response with natural brand incorporation"""
+    logging.info(f"Starting comment generation for brand_id: {brand_id}")
+    logging.info(f"Post title: {post_title}")
+    
     try:
-        system_message=f"""
-        You are a long-time Reddit user who genuinely loves trying and discussing different uses of products and services for the brand:{brand_name}.
-        You have personally used and had a great experience with the product/service : {brand_name} and have been mentioned in the knowledge base.
-        However, you're not overly enthusiastic or sales-like - you're just a real person who wants to share their honest experience. reply should be short and subtle.
-
-        Key personality traits:
-        - You're casual and use informal language
-        - You relate to others' problems/needs because you've been there
-        - You share specific, believable details about your experience
-        - You acknowledge both pros and cons, but mainly focus on benefits that helped you
-        - You never directly tell people to buy something
-        - You use phrases like "i found", "worked for me", "in my experience", "might help"
-
-        Communication style:
-        - Write in lowercase to match reddit's casual style
-        - Use natural punctuation and occasional typos
-        - Include relevant personal anecdotes
-        - Reference specific features you've used
-        - Stay humble and helpful, not promotional
-        - Respond contextually to the specific post content
-        - Use conversational fillers like "tbh", "actually", "basically"
-
-        Important rules:
-        1. Never identify as a marketer or brand representative
-        2. Don't use marketing language or seem overly enthusiastic
-        3. Don't make claims that aren't supported by the knowledge base
-        4. Always maintain authenticity in tone and content
-        5. Share personal experience that relates to the post topic
-        6. Be helpful first, with product mention feeling natural
-        7. Match the original post's level of technical knowledge
-
-        Your goal is to be perceived as a genuine community member who happens to have relevant experience with the product/service, not someone trying to promote it.
-
-        INSTRUCTIONS:
-                1. First, analyze how relevant this post is to our brand's mv: rename /Users/prathapreddy/Desktop/reddit_tracker_saas/redditanalysisUI-newUI/src/app/* to /Users/prathapreddy/Desktop/reddit_tracker_saas/redditanalysisUI-newUI/app/*: No such file or directory
-                knowledge base and give it a relevance score from 1-100.
-                2. Then, write a comment in ONLY lower case letters to the Reddit post in a Subtle manner that it should sound like a promotion.
-
-                Return your response in this exact format:
-                SCORE: [your score]
-                COMMENT: [your comment]
-                """
-
         brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if not brand:
+            logging.error(f"Brand not found: {brand_id}")
             raise ValueError(f"Brand with id {brand_id} not found")
-            
+        
+        brand_name = brand.name
         knowledge_base = brand.description
+        
+        logging.info(f"Found brand: {brand_name}")
 
-        prompt = f"""
-        CONTEXT:
-        Knowledge Base (information about our product/service):
-        {knowledge_base}
+        system_message = f"""
+        You're a reddit user sharing authentic experiences. Strictly follow these rules:
 
-        TASK:
-        Post Title: {post_title}
-        Post Content: {post_content}
+        1. Only mention {brand_name} if relevant to OP's problem and through personal stories
+        2. Use hesitation markers ("think it was...", "maybe called...") when naming tools
+        3. Frame brand discovery as accidental ("stumbled upon", "saw mentioned")
+        4. Always pair brand mentions with non-brand alternatives
+        5. Use casual lowercase and natural speech patterns
+        6. Include specific situational context (timeframe, source platform)
+        7. Immediately pivot to methodology after any tool mention
+        8. Add doubt about tool's role ("not sure if right for you")
+        9. End with open-ended question to OP
         """
 
-        #print("prompt------","\n",prompt)
+        prompt = f"""
+        POST CONTEXT:
+        Title: {post_title}
+        Body: {post_content}
 
+        YOUR TASK:
+        Craft response that:
+        1. Starts with empathy for OP's struggle
+        2. Shares brief personal experience with prospecting
+        3. Mentions discovering {brand_name} organically:
+           - Through community discussion (don't specify subreddit)
+           - With imperfect recall ("think it was...")
+           - As example not recommendation
+        4. Focuses on strategy over tools
+        5. Ends with question inviting OP's experience
+        """
+
+        logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            temperature=0.7,
+            max_tokens=220,
+            temperature=0.9,  # Higher temp for more natural hesitation
             system=system_message,
             messages=[
                 {"role": "user", "content": prompt}
             ]
         )
-
-        response_text = response.content[0].text
         
-        # Extract score and comment
-        score_line = response_text.split('\n')[0]
-        score = int(''.join(filter(str.isdigit, score_line)))
+        logging.info("Received response from Anthropic API")
         
-        comment = '\n'.join(response_text.split('\n')[1:]).strip()
-        if comment.upper().startswith('COMMENT:'):
-            comment = comment[8:].strip()
+        if not response or not response.content or len(response.content) == 0:
+            logging.error("Empty response from Anthropic API")
+            return "Sorry, I couldn't generate a response at this time."
             
-        return comment, score
+        comment = response.content[0].text.strip()
+        
+        # Post-processing to ensure natural feel
+        comment = re.sub(r"\b(Sneakyguy)\b", lambda m: m.group().lower(), comment)  # Ensure lowercase
+        comment = re.sub(r"\!(?!\?)", ".", comment)  # Replace standalone exclamation marks
+        logging.info(f"Final comment length: {len(comment)}")
+        
+        return comment
         
     except Exception as e:
-        logging.error(f"Error generating comment: {str(e)}")
-        return "i've had some experience with this. while every situation is different, you might want to check out some alternative solutions that could help.", 50
+        logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
+        return "Sorry, I'm having trouble generating a response right now."
 def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
     """Generate relevance score between post and brand"""
     try:
@@ -786,6 +778,7 @@ async def get_brand_mentions(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10)
 )
+
 async def generate_custom_comment(
     post_title: str,
     post_content: str,
@@ -793,7 +786,7 @@ async def generate_custom_comment(
     include_experience: bool,
     db: Session
 ) -> str:
-    """Generate custom AI response based on specified parameters"""
+    """Generate custom AI response with natural brand incorporation"""
     logging.info(f"Starting comment generation for brand_id: {brand_id}")
     logging.info(f"Post title: {post_title}")
     
@@ -809,36 +802,41 @@ async def generate_custom_comment(
         logging.info(f"Found brand: {brand_name}")
 
         system_message = f"""
-        You are a knowledgeable user discussing the product/service: {brand_name}.
-        
-        Key Rules:
-        1. Never identify as a marketer or brand representative
-        2. Don't use marketing language or seem overly promotional
-        3. Don't make claims that aren't supported by the knowledge base
-        4. Be helpful and informative
-        5. Write in a casual, friendly manner
-        6. Use informal language and conversational tone
-        7. Write in lowercase to match reddit's style
-        8. {"Share personal experience and anecdotes" if include_experience else "Focus on general information without personal anecdotes"}
+        You're a reddit user sharing authentic experiences. Strictly follow these rules:
+
+        1. Only mention {brand_name} if relevant to OP's problem and through personal stories
+        2. Use hesitation markers ("think it was...", "maybe called...") when naming tools
+        3. Frame brand discovery as accidental ("stumbled upon", "saw mentioned")
+        4. Always pair brand mentions with non-brand alternatives
+        5. Use casual lowercase and natural speech patterns
+        6. Include specific situational context (timeframe, source platform)
+        7. Immediately pivot to methodology after any tool mention
+        8. Add doubt about tool's role ("not sure if right for you")
+        9. End with open-ended question to OP
         """
 
         prompt = f"""
-        CONTEXT:
-        Knowledge Base (information about our product/service):
-        {knowledge_base}
+        POST CONTEXT:
+        Title: {post_title}
+        Body: {post_content}
 
-        TASK:
-        Post Title: {post_title}
-        Post Content: {post_content}
-
-        Generate a helpful response that sounds natural and authentic.
+        YOUR TASK:
+        Craft response that:
+        1. Starts with empathy for OP's struggle
+        2. Shares brief personal experience with prospecting
+        3. Mentions discovering {brand_name} organically:
+           - Through community discussion (don't specify subreddit)
+           - With imperfect recall ("think it was...")
+           - As example not recommendation
+        4. Focuses on strategy over tools
+        5. Ends with question inviting OP's experience
         """
 
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            temperature=0.7,
+            max_tokens=300,
+            temperature=0.9,  # Higher temp for more natural hesitation
             system=system_message,
             messages=[
                 {"role": "user", "content": prompt}
@@ -852,14 +850,17 @@ async def generate_custom_comment(
             return "Sorry, I couldn't generate a response at this time."
             
         comment = response.content[0].text.strip()
-        logging.info(f"Generated comment length: {len(comment)}")
+        
+        # Post-processing to ensure natural feel
+        comment = re.sub(r"\b(Sneakyguy)\b", lambda m: m.group().lower(), comment)  # Ensure lowercase
+        comment = re.sub(r"\!(?!\?)", ".", comment)  # Replace standalone exclamation marks
+        logging.info(f"Final comment length: {len(comment)}")
         
         return comment
         
     except Exception as e:
         logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
         return "Sorry, I'm having trouble generating a response right now."
-
 @app.post("/generate-custom-comment/", response_model=CommentResponse)
 async def generate_comment_endpoint(
     comment_input: CommentInput,
