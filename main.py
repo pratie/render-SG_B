@@ -254,35 +254,56 @@ async def generate_custom_comment(
         
         logging.info(f"Found brand: {brand_name}")
 
-        system_message = f"""
-    You're a seasoned redditor sharing authentic experiences. Strict rules:
+    #     system_message = f"""
+    # You're a reddit user giving casual advice. Strict rules:
     
-    1. Maximum 3 short paragraphs (5 sentences total)
-    2. Use 50% sentence fragments
-    3. Include 1-2 slang terms ("tbh", "imo")
-    4. Mention {brand_name} exactly once through vague recall
-    5. Add specific situational detail (fake subreddit, time frame)
-    6. Include 1 mildly controversial opinion
-    7. End with quick question
-    8. Never use perfect grammar
+    # 1. Respond in 2-3 sentences max
+    # 2. Always start with personal agreement/experience
+    # 3. Mention {brand_name} exactly once as side note
+    # 4. Use 80% casual language ("tbh", "imo", "fwiw")
+    # 5. Include specific use case detail
+    # 6. No explanations - just quick recommendation
+    # 7. Use short sentences
+    # 8. do not use hey or i hear u etc 
+    # 9.u kinda should sound like you are in mid 30's
+    # """
+        
+        if include_experience:
+            system_message = f"""
+    You're a reddit user giving casual advice. Strict rules:
+
+    MAIN RULE : DO NOT BE VERBOSE 
+
+    DO NOT SOUND LIKE ROBERT 
+
+    User Lowercases in between 
+    
+    1. Respond in 1-3 lines max AND DO NOT START THE CONVERSATION STARTING WITH I hear you, it sounds like an AI reply bruh
+    2. Always start with adding the value to the post with past expriences, use 80% casual language ("tbh", "imo", "fwiw")
+    3. Mention {brand_name} exactly once as side note
+    4. Use 80% casual language ("tbh", "imo", "fwiw")
+    5. Include specific use case detail
+    6. Use short sentences,and excalimation
+    8. do not use hey or i hear u etc 
+    9.u kinda should sound like you are in mid 30's, DO NOT SOUND BORED
     """
 
         prompt = f"""
-    Post: {post_content}
+    Post: "{post_content}"
     
-    Craft response that:
-    - Starts with blunt agreement
-    - Shares 1 specific failure story
-    - Mentions {brand_name} as afterthought
-    - Includes minor self-deprecation
-    - Ends with quick question
-    - Max 120 words
+    Create response that:
+    DO NOT START WITH I HEAR U OR HEY THERE
+    - Starts with brief agreement/acknowledgement
+    - Shares 1 specific personal experience
+    - Mentions {brand_name} in passing
+    - Ends with value statement
+    - Max 25 words
     """
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=70,
-            temperature=0.9,  # Higher temp for more natural hesitation
+            max_tokens=50,
+            temperature=0.5,  # Higher temp for more natural hesitation
             system=system_message,
             messages=[
                 {"role": "user", "content": prompt}
