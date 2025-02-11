@@ -261,77 +261,108 @@ async def generate_custom_comment(
 
         if include_experience:
             system_message = f"""
-You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
+You're a Reddit user sharing advice. Core rules:
 
-1. Natural Speech Patterns:
-   - Use 90% casual language ("tbh", "ngl", "lowkey")
-   - Include natural fillers ("anyway", "so yeah", "y'know")
-   - Avoid complete sentences when appropriate
-   - a bit of sarcasm maybe
+1. Opening Style:
+   - NEVER start with "Hey there", "I hear you", or any generic greeting
+   - Jump straight into the point
+   - Use casual openers like "Ngl", "Fr", "Tbh", "Bruh", "Fwiw"
 
-2. Brand Integration:
-   - Mention {brand_name} exactly once as organic side note
-   - Use hesitation markers ("kinda", "sorta", "maybe")
-   - do not start with formal - i hear you etc
-   - Example: "been using [brand] for [specific use] lately, seems decent?"
+2. Length & Style:
+   - Keep responses under 80 words
+   - Use short, punchy sentences
+   - Include max 1-2 emojis
+   - Add natural pauses ("...")
 
-3. Experience Sharing:**
-   - Share 1 hyper-specific anecdote (location/time details)
-   - Add self-deprecating humor ("probably did it wrong tbh")
-   - Use conversational connectors ("btw", "psst", "fwiw")
+3. Brand Integration:
+   - Mention {brand_name} exactly once
+   - Make it super casual ("btw tried {brand_name} recently...")
+   - Never sound promotional
 
-4. Anti-Robot Safeguards:
-   - Never use "I understand" or "based on my knowledge"
-   - Include minor typos (replace 1-2 'you' with 'u')
-   - Add irrelevant personal aside ("cat jumped on keyboard lol")
+4. Personal Touch:
+   - Share one specific detail (time/place)
+   - Add light humor
+   - Keep it real and relatable
 """
 
-        prompt = f"""
-Post: "{post_content}"
+            prompt = f"""
+Post Content: "{post_content}"
 
-Craft response following this natural flow:
-[Agreement] -> [Personal story with specific detail] -> [Brand mention as afterthought] -> [Open-ended question]
+Create a response that:
+1. Starts with a casual opener (no greetings)
+2. Makes one specific point
+3. Casually mentions the brand
+4. Ends with a question
 
 Requirements:
-- Max 18 words
-- Include 1 regional reference (e.g., "back in Austin...")
-- Use 1 emoji maximum
-- Add verbal filler ("...", "anyway," "so yeah")
+- Max 80 words
+- No generic intros
+- One specific detail
+- Conversational tone
 """
-        logging.info("Sending request to Anthropic API")
-        response = anthropic_client.messages.create(
-    model="claude-3-haiku-20240307",
-    max_tokens=8,  # Tighter constraint
-    temperature=0.7,  # Increased randomness  # Encourage novel expressions
-    system=system_message,
-    messages=[{"role": "user", "content": prompt}]
-)
-        logging.info("Received response from Anthropic API")
-        
-        if not response or not response.content or len(response.content) == 0:
-            logging.error("Empty response from Anthropic API")
-            return "Sorry, I couldn't generate a response at this time."
+            logging.info("Sending request to Anthropic API")
+            response = anthropic_client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=150,  # Limit length
+                temperature=0.8,  # More creative
+                system=system_message,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            logging.info("Received response from Anthropic API")
             
-        comment = response.content[0].text.strip()
-        
-        # Post-processing to ensure natural feel
-            # Add human-like imperfections
-        comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
-        comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
-        comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
-        comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
-        # replace "-" in the comment
-        comment = comment.replace("-", " ")
-        #replace hey there, i hear you with "" also add caps lock like if its starts with Hi there, I hear you etc
-        comment = comment.replace("hey there, i hear you", "")
-        comment = comment.lower()
-        comment = comment.title()
-        comment = comment.replace("I hear you", "")
-        comment = comment.replace("Hey there", "")
-        comment = comment.replace("Hi there", "")
-        logging.info(f"Finallls comment length: {len(comment)}")
-        
-        return comment
+            if not response or not response.content or len(response.content) == 0:
+                logging.error("Empty response from Anthropic API")
+                return "Sorry, I couldn't generate a response at this time."
+                
+            comment = response.content[0].text.strip()
+            
+            # Enhanced post-processing
+            def clean_comment(text):
+                # Remove common generic starts
+                generic_starts = [
+                    r'^hey\s+there[,\s]*',
+                    r'^hi\s+there[,\s]*',
+                    r'^hello[,\s]*',
+                    r'^i\s+hear\s+you[,\s]*',
+                    r'^i\s+understand[,\s]*',
+                    r'^greetings[,\s]*',
+                    r'^thanks\s+for\s+sharing[,\s]*'
+                ]
+                
+                for pattern in generic_starts:
+                    text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+                
+                # Clean up multiple spaces and newlines
+                text = re.sub(r'\s+', ' ', text)
+                text = text.strip()
+                
+                # Ensure first letter is capitalized
+                text = text[0].upper() + text[1:] if text else text
+                
+                # Replace formal words with casual alternatives
+                replacements = {
+                    r'\bcurrently\b': 'rn',
+                    r'\bgoing to\b': 'gonna',
+                    r'\bwant to\b': 'wanna',
+                    r'\byou know\b': 'yk',
+                    r'\bto be honest\b': 'tbh',
+                    r'\bfor real\b': 'fr',
+                    r'\bin my opinion\b': 'imo'
+                }
+                
+                for formal, casual in replacements.items():
+                    text = re.sub(formal, casual, text, flags=re.IGNORECASE)
+                
+                return text
+            
+            comment = clean_comment(comment)
+            
+            # Ensure the comment isn't too long
+            if len(comment.split()) > 80:
+                comment = ' '.join(comment.split()[:80]) + '...'
+                
+            logging.info(f"Generated comment: {comment}")
+            return comment
         
     except Exception as e:
         logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
@@ -824,47 +855,51 @@ async def generate_custom_comment(
         logging.info(f"Found brand: {brand_name}")
 
         system_message = f"""
-        You're a reddit user sharing authentic experiences. Strictly follow these rules:
+        You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
 
-        1. Only mention {brand_name} if relevant to OP's problem and through personal stories
-        2. Use hesitation markers ("think it was...", "maybe called...") when naming tools
-        3. Frame brand discovery as accidental ("stumbled upon", "saw mentioned")
-        4. Always pair brand mentions with non-brand alternatives
-        5. Use casual lowercase and natural speech patterns
-        6. Include specific situational context (timeframe, source platform)
-        7. Immediately pivot to methodology after any tool mention
-        8. Add doubt about tool's role ("not sure if right for you")
-        9. End with open-ended question to OP
-        """
+1. Natural Speech Patterns:
+   - Use 90% casual language ("tbh", "ngl", "lowkey")
+   - Include natural fillers ("anyway", "so yeah", "y'know")
+   - Avoid complete sentences when appropriate
+   - a bit of sarcasm maybe
+
+2. Brand Integration:
+   - Mention {brand_name} exactly once as organic side note
+   - Use hesitation markers ("kinda", "sorta", "maybe")
+   - do not start with formal - i hear you etc
+   - Example: "been using [brand] for [specific use] lately, seems decent?"
+
+3. Experience Sharing:**
+   - Share 1 hyper-specific anecdote (location/time details)
+   - Add self-deprecating humor ("probably did it wrong tbh")
+   - Use conversational connectors ("btw", "psst", "fwiw")
+
+4. Anti-Robot Safeguards:
+   - Never use "I understand" or "based on my knowledge"
+   - Include minor typos (replace 1-2 'you' with 'u')
+   - Add irrelevant personal aside ("cat jumped on keyboard lol")
+"""
 
         prompt = f"""
-        POST CONTEXT:
-        Title: {post_title}
-        Body: {post_content}
+Post: "{post_content}"
 
-        YOUR TASK:
-        Craft response that:
-        1. Starts with empathy for OP's struggle
-        2. Shares brief personal experience with prospecting
-        3. Mentions discovering {brand_name} organically:
-           - Through community discussion (don't specify subreddit)
-           - With imperfect recall ("think it was...")
-           - As example not recommendation
-        4. Focuses on strategy over tools
-        5. Ends with question inviting OP's experience
-        """
+Craft response following this natural flow:
+[Agreement] -> [Personal story with specific detail] -> [Brand mention as afterthought] -> [Open-ended question]
 
+Requirements:
+- Max 18 words
+- Include 1 regional reference (e.g., "back in Austin...")
+- Use 1 emoji maximum
+- Add verbal filler ("...", "anyway," "so yeah")
+"""
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=300,
-            temperature=0.9,  # Higher temp for more natural hesitation
-            system=system_message,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
+    model="claude-3-haiku-20240307",
+    max_tokens=8,  # Tighter constraint
+    temperature=0.7,  # Increased randomness  # Encourage novel expressions
+    system=system_message,
+    messages=[{"role": "user", "content": prompt}]
+)
         logging.info("Received response from Anthropic API")
         
         if not response or not response.content or len(response.content) == 0:
@@ -874,9 +909,22 @@ async def generate_custom_comment(
         comment = response.content[0].text.strip()
         
         # Post-processing to ensure natural feel
-        comment = re.sub(r"\b(Sneakyguy)\b", lambda m: m.group().lower(), comment)  # Ensure lowercase
-        comment = re.sub(r"\!(?!\?)", ".", comment)  # Replace standalone exclamation marks
-        logging.info(f"Final comment length: {len(comment)}")
+            # Add human-like imperfections
+        comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
+        comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
+        comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
+        comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
+        # replace "-" in the comment
+        comment = comment.replace("-", " ")
+        #replace hey there, i hear you with "" also add caps lock like if its starts with Hi there, I hear you etc
+        comment = comment.replace("hey there, i hear you", "")
+        comment = comment.replace("Hi there, I hear you", "")
+        comment = comment.lower()
+        comment = comment.title()
+        comment = comment.replace("I hear you", "")
+        comment = comment.replace("Hey there", "")
+        comment = comment.replace("Hi there", "")
+        logging.info(f"Finallls comment length: {len(comment)}")
         
         return comment
         
