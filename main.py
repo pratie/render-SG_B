@@ -320,6 +320,10 @@ Requirements:
         comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
         comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
         comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
+        # replace "-" in the comment
+        comment = comment.replace("-", " ")
+        #replace hey there, i hear you with ""
+        comment = comment.replace("hey there, i hear you", "")
         logging.info(f"Finallls comment length: {len(comment)}")
         
         return comment
