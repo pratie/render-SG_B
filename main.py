@@ -322,8 +322,13 @@ Requirements:
         comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
         # replace "-" in the comment
         comment = comment.replace("-", " ")
-        #replace hey there, i hear you with ""
+        #replace hey there, i hear you with "" also add caps lock like if its starts with Hi there, I hear you etc
         comment = comment.replace("hey there, i hear you", "")
+        comment = comment.lower()
+        comment = comment.title()
+        comment = comment.replace("I hear you", "")
+        comment = comment.replace("Hey there", "")
+        comment = comment.replace("Hi there", "")
         logging.info(f"Finallls comment length: {len(comment)}")
         
         return comment
