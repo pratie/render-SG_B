@@ -299,3 +299,15 @@ class CommentInput(BaseModel):
 
 class CommentResponse(BaseModel):
     comment: str
+
+class PostCommentInput(BaseModel):
+    post_title: str
+    post_content: str
+    brand_id: int
+    post_url: str
+    comment_text: str
+
+class PostCommentResponse(BaseModel):
+    comment: str
+    comment_url: str
+    status: str = "success"

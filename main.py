@@ -31,7 +31,8 @@ from crud import UserCRUD, BrandCRUD, RedditMentionCRUD
 from models import (
     User, Brand, RedditMention, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
-    KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse
+    KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse,
+    PostCommentInput, PostCommentResponse
 )
 from auth.router import router as auth_router, get_current_user
 from routers.payment import router as payment_router
@@ -59,6 +60,10 @@ app = FastAPI(
         {
             "name": "brands",
             "description": "Brand management operations"
+        },
+        {
+            "name": "reddit",
+            "description": "Reddit interaction operations"
         }
     ]
 )
@@ -254,62 +259,53 @@ async def generate_custom_comment(
         
         logging.info(f"Found brand: {brand_name}")
 
-    #     system_message = f"""
-    # You're a reddit user giving casual advice. Strict rules:
-    
-    # 1. Respond in 2-3 sentences max
-    # 2. Always start with personal agreement/experience
-    # 3. Mention {brand_name} exactly once as side note
-    # 4. Use 80% casual language ("tbh", "imo", "fwiw")
-    # 5. Include specific use case detail
-    # 6. No explanations - just quick recommendation
-    # 7. Use short sentences
-    # 8. do not use hey or i hear u etc 
-    # 9.u kinda should sound like you are in mid 30's
-    # """
-        
         if include_experience:
             system_message = f"""
-    You're a reddit user giving casual advice. Strict rules:
+You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
 
-    MAIN RULE : DO NOT BE VERBOSE 
+1. Natural Speech Patterns:
+   - Use 90% casual language ("tbh", "ngl", "lowkey")
+   - Include natural fillers ("anyway", "so yeah", "y'know")
+   - Avoid complete sentences when appropriate
+   - a bit of sarcasm maybe
 
-    DO NOT SOUND LIKE ROBERT 
+2. Brand Integration:
+   - Mention {brand_name} exactly once as organic side note
+   - Use hesitation markers ("kinda", "sorta", "maybe")
+   - do not start with formal - i hear you etc
+   - Example: "been using [brand] for [specific use] lately, seems decent?"
 
-    User Lowercases in between 
-    
-    1. Respond in 1-3 lines max AND DO NOT START THE CONVERSATION STARTING WITH I hear you, it sounds like an AI reply bruh
-    2. Always start with adding the value to the post with past expriences, use 80% casual language ("tbh", "imo", "fwiw")
-    3. Mention {brand_name} exactly once as side note
-    4. Use 80% casual language ("tbh", "imo", "fwiw")
-    5. Include specific use case detail
-    6. Use short sentences,and excalimation
-    8. do not use hey or i hear u etc 
-    9.u kinda should sound like you are in mid 30's, DO NOT SOUND BORED
-    """
+3. Experience Sharing:**
+   - Share 1 hyper-specific anecdote (location/time details)
+   - Add self-deprecating humor ("probably did it wrong tbh")
+   - Use conversational connectors ("btw", "psst", "fwiw")
+
+4. Anti-Robot Safeguards:
+   - Never use "I understand" or "based on my knowledge"
+   - Include minor typos (replace 1-2 'you' with 'u')
+   - Add irrelevant personal aside ("cat jumped on keyboard lol")
+"""
 
         prompt = f"""
-    Post: "{post_content}"
-    
-    Create response that:
-    DO NOT START WITH I HEAR U OR HEY THERE
-    - Starts with brief agreement/acknowledgement
-    - Shares 1 specific personal experience
-    - Mentions {brand_name} in passing
-    - Ends with value statement
-    - Max 25 words
-    """
+Post: "{post_content}"
+
+Craft response following this natural flow:
+[Agreement] -> [Personal story with specific detail] -> [Brand mention as afterthought] -> [Open-ended question]
+
+Requirements:
+- Max 18 words
+- Include 1 regional reference (e.g., "back in Austin...")
+- Use 1 emoji maximum
+- Add verbal filler ("...", "anyway," "so yeah")
+"""
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=50,
-            temperature=0.5,  # Higher temp for more natural hesitation
-            system=system_message,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
+    model="claude-3-haiku-20240307",
+    max_tokens=8,  # Tighter constraint
+    temperature=0.7,  # Increased randomness  # Encourage novel expressions
+    system=system_message,
+    messages=[{"role": "user", "content": prompt}]
+)
         logging.info("Received response from Anthropic API")
         
         if not response or not response.content or len(response.content) == 0:
@@ -319,9 +315,12 @@ async def generate_custom_comment(
         comment = response.content[0].text.strip()
         
         # Post-processing to ensure natural feel
-        comment = re.sub(r"\b(Sneakyguy)\b", lambda m: m.group().lower(), comment)  # Ensure lowercase
-        comment = re.sub(r"\!(?!\?)", ".", comment)  # Replace standalone exclamation marks
-        logging.info(f"Final comment length: {len(comment)}")
+            # Add human-like imperfections
+        comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
+        comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
+        comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
+        comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
+        logging.info(f"Finallls comment length: {len(comment)}")
         
         return comment
         
@@ -361,8 +360,8 @@ def generate_relevance_score(post_title: str, post_content: str, brand_id: int, 
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            temperature=0.1,
+            max_tokens=200,
+            temperature=0.5,
             system=system_message,
             messages=[
                 {"role": "user", "content": prompt}
@@ -910,6 +909,110 @@ async def generate_comment_endpoint(
     except Exception as e:
         logging.error(f"Error in generate_comment_endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error generating comment")
+
+@app.post("/post-reddit-comment/", response_model=PostCommentResponse, tags=["reddit"])
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+async def post_reddit_comment(
+    comment_input: PostCommentInput,
+    request: Request,
+    current_user_email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Post a comment to Reddit.
+    Requires authentication and proper Reddit API credentials.
+    """
+    logging.info(f"Received comment posting request from user: {current_user_email}")
+    
+    try:
+        # Verify brand ownership
+        brand = BrandCRUD.get_brand(db, comment_input.brand_id, current_user_email)
+        if not brand:
+            raise HTTPException(
+                status_code=404,
+                detail="Brand not found or unauthorized access"
+            )
+
+        # Initialize Reddit client
+        reddit = praw.Reddit(
+            client_id=os.getenv("REDDIT_CLIENT_ID"),
+            client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
+            user_agent=os.getenv("REDDIT_USER_AGENT", "RedditAnalyzer/1.0"),
+            username=os.getenv("REDDIT_USERNAME"),
+            password=os.getenv("REDDIT_PASSWORD")
+        )
+
+        logging.info(f"Attempting to post comment on: {comment_input.post_url}")
+
+        try:
+            # Extract submission ID from URL
+            match = re.search(r'comments/([a-z0-9]+)/', comment_input.post_url, re.I)
+            if not match:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid Reddit post URL"
+                )
+            
+            submission_id = match.group(1)
+            submission = reddit.submission(id=submission_id)
+
+            # Verify the submission exists and matches the input
+            if not submission or submission.title != comment_input.post_title:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Reddit post not found or title mismatch"
+                )
+
+            # Post the comment
+            comment = submission.reply(comment_input.comment_text)
+            
+            logging.info(f"Successfully posted comment. URL: {comment.permalink}")
+
+            return PostCommentResponse(
+                comment=comment_input.comment_text,
+                comment_url=f"https://reddit.com{comment.permalink}",
+                status="success"
+            )
+
+        except prawcore.exceptions.Forbidden:
+            logging.error("Reddit authentication failed or insufficient permissions")
+            raise HTTPException(
+                status_code=403,
+                detail="Reddit authentication failed or insufficient permissions"
+            )
+        except prawcore.exceptions.NotFound:
+            logging.error("Reddit post not found")
+            raise HTTPException(
+                status_code=404,
+                detail="Reddit post not found"
+            )
+        except prawcore.exceptions.ServerError:
+            logging.error("Reddit server error")
+            raise HTTPException(
+                status_code=502,
+                detail="Reddit server error"
+            )
+        except prawcore.exceptions.TooLarge:
+            logging.error("Comment too large")
+            raise HTTPException(
+                status_code=400,
+                detail="Comment is too long for Reddit"
+            )
+        except Exception as e:
+            logging.error(f"Error interacting with Reddit: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to post comment: {str(e)}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred"
+        )
 
 if __name__ == "__main__":
     import uvicorn
