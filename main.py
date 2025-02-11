@@ -554,7 +554,7 @@ async def analyze_reddit_content(
                             
                             post_data = {
                                 "title": post.title,
-                                "content": post.selftext[:5000],  # Limit content length
+                                "content": post.selftext[:10000],  # Limit content length
                                 "url": f"https://reddit.com{post.permalink}",
                                 "subreddit": clean_subreddit_name,
                                 "created_utc": post.created_utc,
@@ -570,7 +570,7 @@ async def analyze_reddit_content(
                             mention = RedditMention(
                                 brand_id=brand.id,
                                 title=post.title,
-                                content=post.selftext[:500],  # Limit content length
+                                content=post.selftext[:10000],  # Limit content length
                                 url=f"https://reddit.com{post.permalink}",
                                 subreddit=clean_subreddit_name,
                                 keyword=matching_keywords[0],  # Primary matching keyword

@@ -149,8 +149,8 @@ class AnalysisInput(BaseModel):
     brand_id: int
     keywords: List[str]
     subreddits: List[str]
-    time_period: Optional[str] = "week"  # week, month, year
-    limit: Optional[int] = 10
+    time_period: Optional[str] = "month"  # week, month, year
+    limit: Optional[int] = 100
 
 class KeywordResponse(BaseModel):
     keywords: List[str]
