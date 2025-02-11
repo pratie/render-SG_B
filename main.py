@@ -20,6 +20,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import certifi
 import ssl
 import aiohttp
+import random
 
 from fastapi.responses import JSONResponse
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_analysis_rate_limit
@@ -318,26 +319,34 @@ Requirements:
             
             # Enhanced post-processing
             def clean_comment(text):
-                # Remove common generic starts
+                # Remove only the greeting part up to the comma
                 generic_starts = [
-                    r'^hey\s+there[,\s]*',
-                    r'^hi\s+there[,\s]*',
-                    r'^hello[,\s]*',
-                    r'^i\s+hear\s+you[,\s]*',
-                    r'^i\s+understand[,\s]*',
-                    r'^greetings[,\s]*',
-                    r'^thanks\s+for\s+sharing[,\s]*'
+                    r'^hey\s+there,\s*',
+                    r'^hi\s+there,\s*',
+                    r'^hello,\s*',
+                    r'^i\s+hear\s+you,\s*',
+                    r'^i\s+understand,\s*',
+                    r'^greetings,\s*',
+                    r'^thanks\s+for\s+sharing,\s*'
                 ]
                 
+                # Store original text to check if any changes were made
+                original_text = text
+                
                 for pattern in generic_starts:
-                    text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+                    # If pattern matches at start and has a comma, remove up to comma
+                    match = re.match(pattern, text, flags=re.IGNORECASE)
+                    if match:
+                        text = text[match.end():]
+                        break  # Stop after first match
                 
                 # Clean up multiple spaces and newlines
                 text = re.sub(r'\s+', ' ', text)
                 text = text.strip()
                 
-                # Ensure first letter is capitalized
-                text = text[0].upper() + text[1:] if text else text
+                # Ensure first letter is capitalized if text was modified
+                if text != original_text:
+                    text = text[0].upper() + text[1:] if text else text
                 
                 # Replace formal words with casual alternatives
                 replacements = {
