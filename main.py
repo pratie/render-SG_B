@@ -260,118 +260,124 @@ async def generate_custom_comment(
         
         logging.info(f"Found brand: {brand_name}")
 
-        if include_experience:
-            system_message = f"""
-You're a Reddit user sharing advice. Core rules:
+        system_message = f"""
+        You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
 
-1. Opening Style:
-   - NEVER start with "Hey there", "I hear you", or any generic greeting
-   - Jump straight into the point
-   - Use casual openers like "Ngl", "Fr", "Tbh", "Bruh", "Fwiw"
-
-2. Length & Style:
-   - Keep responses under 80 words
-   - Use short, punchy sentences
-   - Include max 1-2 emojis
+1. Natural Speech Patterns:
+   - Use casual language ("tbh", "ngl", "lowkey", "fr", "y'know")
+   - Keep it short and punchy
    - Add natural pauses ("...")
+   - Never be overly enthusiastic
 
-3. Brand Integration:
-   - Mention {brand_name} exactly once
-   - Make it super casual ("btw tried {brand_name} recently...")
-   - Never sound promotional
+2. Brand Integration (CRITICAL):
+   - MUST mention {brand_name} exactly once
+   - Make it super casual and natural:
+     * "been using {brand_name} for my stuff lately"
+     * "tried {brand_name} a while back"
+     * "{brand_name} kinda helped me with this"
+   - Never sound promotional or salesy
+   - Never use exclamation marks when mentioning the brand
 
-4. Personal Touch:
-   - Share one specific detail (time/place)
-   - Add light humor
-   - Keep it real and relatable
+3. Location & Problem Details (IMPORTANT):
+   - Use real US tech hub cities:
+     * Austin, TX
+     * San Francisco
+     * Seattle
+     * Boston
+     * NYC
+     * Denver
+     * Miami
+   - Reference specific areas sometimes (SoMa, South Lake Union, etc.)
+   - NEVER use placeholders like [city] or [problem]
+   - Use the actual problem from the post (lead gen, email list, etc.)
+   - Make timing believable (last month, few weeks back)
+
+4. Anti-Detection Measures:
+   - Never praise the brand too much
+   - Add filler words ("like", "kinda", "sorta")
+   - Include a typo or two
+   - End with a question to seem natural
 """
 
-            prompt = f"""
-Post Content: "{post_content}"
+        prompt = f"""
+Post: "{post_content}"
 
-Create a response that:
-1. Starts with a casual opener (no greetings)
-2. Makes one specific point
-3. Casually mentions the brand
+Create a subtle response that:
+1. References the EXACT problem from the post (never use [problem])
+2. Mentions a specific real city (use Austin, SF, Seattle, etc.)
+3. MUST include {brand_name} as a casual side note
 4. Ends with a question
 
+Example formats (adapt based on actual post content):
+For lead gen post:
+"Ugh lead gen was killing me in Austin... tried {brand_name} recently, kinda works. anyone else struggle with this? 🤔"
+
+For email list post:
+"Email list growth was rough in Seattle... {brand_name} helped a bit last month. what tools yall using? 🤔"
+
 Requirements:
-- Max 80 words
-- No generic intros
-- One specific detail
-- Conversational tone
+- Max 18 words
+- Must mention {brand_name} exactly once
+- Use 1 emoji maximum
+- Sound casual but not overly helpful
+- Use real city names and specific problems, never placeholders
 """
-            logging.info("Sending request to Anthropic API")
-            response = anthropic_client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=150,  # Limit length
-                temperature=0.8,  # More creative
-                system=system_message,
-                messages=[{"role": "user", "content": prompt}]
+        logging.info("Sending request to Anthropic API")
+        response = anthropic_client.messages.create(
+    model="claude-3-haiku-20240307",
+    max_tokens=200,  # Tighter constraint
+    temperature=0.7,  # Increased randomness  # Encourage novel expressions
+    system=system_message,
+    messages=[{"role": "user", "content": prompt}]
+)
+        logging.info("Received response from Anthropic API")
+        
+        if not response or not response.content or len(response.content) == 0:
+            logging.error("Empty response from Anthropic API")
+            return "Sorry, I couldn't generate a response at this time."
+            
+        comment = response.content[0].text.strip()
+        
+        # Post-processing to ensure natural feel
+        # Add human-like imperfections
+        comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
+        comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
+        comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
+        comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
+        
+        # Clean up formatting
+        comment = comment.replace("-", " ")
+        
+        # Remove generic starts if present
+        comment = comment.replace("hey there, i hear you", "")
+        comment = comment.replace("Hi there, I hear you", "")
+        comment = comment.replace("I hear you", "")
+        comment = comment.replace("Hey there", "")
+        comment = comment.replace("Hi there", "")
+        
+        # Convert to proper sentence case
+        comment = comment.lower()  # First convert all to lowercase
+        
+        # Split into sentences and capitalize first letter of each
+        sentences = comment.split('. ')
+        sentences = [s[0].upper() + s[1:] if s else '' for s in sentences]
+        comment = '. '.join(sentences)
+        
+        # Always capitalize 'I' as a word
+        comment = re.sub(r'\bi\b', 'I', comment)
+        
+        # Ensure brand name is properly capitalized
+        if brand_name:
+            comment = re.sub(
+                rf'\b{re.escape(brand_name.lower())}\b',
+                brand_name,
+                comment,
+                flags=re.IGNORECASE
             )
-            logging.info("Received response from Anthropic API")
-            
-            if not response or not response.content or len(response.content) == 0:
-                logging.error("Empty response from Anthropic API")
-                return "Sorry, I couldn't generate a response at this time."
-                
-            comment = response.content[0].text.strip()
-            
-            # Enhanced post-processing
-            def clean_comment(text):
-                # Remove only the greeting part up to the comma
-                generic_starts = [
-                    r'^hey\s+there,\s*',
-                    r'^hi\s+there,\s*',
-                    r'^hello,\s*',
-                    r'^i\s+hear\s+you,\s*',
-                    r'^i\s+understand,\s*',
-                    r'^greetings,\s*',
-                    r'^thanks\s+for\s+sharing,\s*'
-                ]
-                
-                # Store original text to check if any changes were made
-                original_text = text
-                
-                for pattern in generic_starts:
-                    # If pattern matches at start and has a comma, remove up to comma
-                    match = re.match(pattern, text, flags=re.IGNORECASE)
-                    if match:
-                        text = text[match.end():]
-                        break  # Stop after first match
-                
-                # Clean up multiple spaces and newlines
-                text = re.sub(r'\s+', ' ', text)
-                text = text.strip()
-                
-                # Ensure first letter is capitalized if text was modified
-                if text != original_text:
-                    text = text[0].upper() + text[1:] if text else text
-                
-                # Replace formal words with casual alternatives
-                replacements = {
-                    r'\bcurrently\b': 'rn',
-                    r'\bgoing to\b': 'gonna',
-                    r'\bwant to\b': 'wanna',
-                    r'\byou know\b': 'yk',
-                    r'\bto be honest\b': 'tbh',
-                    r'\bfor real\b': 'fr',
-                    r'\bin my opinion\b': 'imo'
-                }
-                
-                for formal, casual in replacements.items():
-                    text = re.sub(formal, casual, text, flags=re.IGNORECASE)
-                
-                return text
-            
-            comment = clean_comment(comment)
-            
-            # Ensure the comment isn't too long
-            if len(comment.split()) > 80:
-                comment = ' '.join(comment.split()[:80]) + '...'
-                
-            logging.info(f"Generated comment: {comment}")
-            return comment
+        
+        logging.info(f"Final comment length: {len(comment)}")
+        
+        return comment
         
     except Exception as e:
         logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
@@ -867,44 +873,68 @@ async def generate_custom_comment(
         You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
 
 1. Natural Speech Patterns:
-   - Use 90% casual language ("tbh", "ngl", "lowkey")
-   - Include natural fillers ("anyway", "so yeah", "y'know")
-   - Avoid complete sentences when appropriate
-   - a bit of sarcasm maybe
+   - Use casual language ("tbh", "ngl", "lowkey", "fr", "y'know")
+   - Keep it short and punchy
+   - Add natural pauses ("...")
+   - Never be overly enthusiastic
 
-2. Brand Integration:
-   - Mention {brand_name} exactly once as organic side note
-   - Use hesitation markers ("kinda", "sorta", "maybe")
-   - do not start with formal - i hear you etc
-   - Example: "been using [brand] for [specific use] lately, seems decent?"
+2. Brand Integration (CRITICAL):
+   - MUST mention {brand_name} exactly once
+   - Make it super casual and natural:
+     * "been using {brand_name} for my stuff lately"
+     * "tried {brand_name} a while back"
+     * "{brand_name} kinda helped me with this"
+   - Never sound promotional or salesy
+   - Never use exclamation marks when mentioning the brand
 
-3. Experience Sharing:**
-   - Share 1 hyper-specific anecdote (location/time details)
-   - Add self-deprecating humor ("probably did it wrong tbh")
-   - Use conversational connectors ("btw", "psst", "fwiw")
+3. Location & Problem Details (IMPORTANT):
+   - Use real US tech hub cities:
+     * Austin, TX
+     * San Francisco
+     * Seattle
+     * Boston
+     * NYC
+     * Denver
+     * Miami
+   - Reference specific areas sometimes (SoMa, South Lake Union, etc.)
+   - NEVER use placeholders like [city] or [problem]
+   - Use the actual problem from the post (lead gen, email list, etc.)
+   - Make timing believable (last month, few weeks back)
 
-4. Anti-Robot Safeguards:
-   - Never use "I understand" or "based on my knowledge"
-   - Include minor typos (replace 1-2 'you' with 'u')
-   - Add irrelevant personal aside ("cat jumped on keyboard lol")
+4. Anti-Detection Measures:
+   - Never praise the brand too much
+   - Add filler words ("like", "kinda", "sorta")
+   - Include a typo or two
+   - End with a question to seem natural
 """
 
         prompt = f"""
 Post: "{post_content}"
 
-Craft response following this natural flow:
-[Agreement] -> [Personal story with specific detail] -> [Brand mention as afterthought] -> [Open-ended question]
+Create a subtle response that:
+1. References the EXACT problem from the post (never use [problem])
+2. Mentions a specific real city (use Austin, SF, Seattle, etc.)
+3. MUST include {brand_name} as a casual side note
+4. Ends with a question
+
+Example formats (adapt based on actual post content):
+For lead gen post:
+"Ugh lead gen was killing me in Austin... tried {brand_name} recently, kinda works. anyone else struggle with this? 🤔"
+
+For email list post:
+"Email list growth was rough in Seattle... {brand_name} helped a bit last month. what tools yall using? 🤔"
 
 Requirements:
 - Max 18 words
-- Include 1 regional reference (e.g., "back in Austin...")
+- Must mention {brand_name} exactly once
 - Use 1 emoji maximum
-- Add verbal filler ("...", "anyway," "so yeah")
+- Sound casual but not overly helpful
+- Use real city names and specific problems, never placeholders
 """
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
     model="claude-3-haiku-20240307",
-    max_tokens=8,  # Tighter constraint
+    max_tokens=200,  # Tighter constraint
     temperature=0.7,  # Increased randomness  # Encourage novel expressions
     system=system_message,
     messages=[{"role": "user", "content": prompt}]
@@ -918,22 +948,43 @@ Requirements:
         comment = response.content[0].text.strip()
         
         # Post-processing to ensure natural feel
-            # Add human-like imperfections
+        # Add human-like imperfections
         comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
         comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
         comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
         comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
-        # replace "-" in the comment
+        
+        # Clean up formatting
         comment = comment.replace("-", " ")
-        #replace hey there, i hear you with "" also add caps lock like if its starts with Hi there, I hear you etc
+        
+        # Remove generic starts if present
         comment = comment.replace("hey there, i hear you", "")
         comment = comment.replace("Hi there, I hear you", "")
-        comment = comment.lower()
-        comment = comment.title()
         comment = comment.replace("I hear you", "")
         comment = comment.replace("Hey there", "")
         comment = comment.replace("Hi there", "")
-        logging.info(f"Finallls comment length: {len(comment)}")
+        
+        # Convert to proper sentence case
+        comment = comment.lower()  # First convert all to lowercase
+        
+        # Split into sentences and capitalize first letter of each
+        sentences = comment.split('. ')
+        sentences = [s[0].upper() + s[1:] if s else '' for s in sentences]
+        comment = '. '.join(sentences)
+        
+        # Always capitalize 'I' as a word
+        comment = re.sub(r'\bi\b', 'I', comment)
+        
+        # Ensure brand name is properly capitalized
+        if brand_name:
+            comment = re.sub(
+                rf'\b{re.escape(brand_name.lower())}\b',
+                brand_name,
+                comment,
+                flags=re.IGNORECASE
+            )
+        
+        logging.info(f"Final comment length: {len(comment)}")
         
         return comment
         
