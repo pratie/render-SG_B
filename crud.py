@@ -154,7 +154,7 @@ class RedditMentionCRUD:
         db: Session,
         brand_id: int,
         skip: int = 0,
-        limit: int = 50
+        limit: int = 500
     ) -> List[models.RedditMention]:
         """Get all mentions for a brand"""
         mentions = db.query(models.RedditMention).filter(

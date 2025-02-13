@@ -150,7 +150,7 @@ class AnalysisInput(BaseModel):
     keywords: List[str]
     subreddits: List[str]
     time_period: Optional[str] = "month"  # week, month, year
-    limit: Optional[int] = 100
+    limit: Optional[int] = 200
 
 class KeywordResponse(BaseModel):
     keywords: List[str]

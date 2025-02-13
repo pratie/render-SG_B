@@ -325,7 +325,7 @@ Requirements:
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
     model="claude-3-haiku-20240307",
-    max_tokens=200,  # Tighter constraint
+    max_tokens=250,  # Tighter constraint
     temperature=0.7,  # Increased randomness  # Encourage novel expressions
     system=system_message,
     messages=[{"role": "user", "content": prompt}]
@@ -800,7 +800,7 @@ async def update_brand_subreddits(
 async def get_brand_mentions(
     brand_id: int,
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 500,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
