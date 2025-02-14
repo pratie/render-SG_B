@@ -337,6 +337,7 @@ Generate ONLY the response comment between <response> tags. The response should 
         # Basic cleanup and formatting
         comment = comment.replace("Hey there, ", "").replace("Hi there, ", "").strip()
         comment = comment.replace("-", " ").replace(":", "").replace("  ", "").strip()
+        comment = comment.replace("  ", " ").replace("  ", " ").replace("That's a great question!", "").replace("Hey there!", "")
         
         # Ensure proper capitalization of brand name
         if brand_name:
