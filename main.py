@@ -250,123 +250,95 @@ async def generate_custom_comment(
     logging.info(f"Post title: {post_title}")
     
     try:
+        # Get brand information from database
         brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if not brand:
             logging.error(f"Brand not found: {brand_id}")
             raise ValueError(f"Brand with id {brand_id} not found")
         
         brand_name = brand.name
-        knowledge_base = brand.description
+        brand_description = brand.description
         
         logging.info(f"Found brand: {brand_name}")
 
-        system_message = f"""
-        You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
-
-1. Natural Speech Patterns:
-   - Use casual language ("tbh", "ngl", "lowkey", "fr", "y'know")
-   - Keep it short and punchy
-   - Add natural pauses ("...")
-   - Never be overly enthusiastic
-
-2. Brand Integration (CRITICAL):
-   - MUST mention {brand_name} exactly once
-   - Make it super casual and natural:
-     * "been using {brand_name} for my stuff lately"
-     * "tried {brand_name} a while back"
-     * "{brand_name} kinda helped me with this"
-   - Never sound promotional or salesy
-   - Never use exclamation marks when mentioning the brand
-
-3. Location & Problem Details (IMPORTANT):
-   - Use real US tech hub cities:
-     * Austin, TX
-     * San Francisco
-     * Seattle
-     * Boston
-     * NYC
-     * Denver
-     * Miami
-   - Reference specific areas sometimes (SoMa, South Lake Union, etc.)
-   - NEVER use placeholders like [city] or [problem]
-   - Use the actual problem from the post (lead gen, email list, etc.)
-   - Make timing believable (last month, few weeks back)
-
-4. Anti-Detection Measures:
-   - Never praise the brand too much
-   - Add filler words ("like", "kinda", "sorta")
-   - Include a typo or two
-   - End with a question to seem natural
+        # Define system message and prompt
+        system_message = """
+You are an expert Reddit user who knows how to engage with people in reddit discussions naturally and authentically.
+Your responses should be helpful, conversational, and never end with generic questions like "let me know if you have questions" or "hope this helps".
 """
 
         prompt = f"""
-Post: "{post_content}"
+<system>
+You are tasked with generating a custom comment for a post on reddit.
+The goal is to naturally mention the brand/project in relevant discussions.
+Never sound promotional or like marketing - be authentic and helpful.
+Never end with generic phrases like:
+- "let me know if you have questions"
+- "hope this helps"
+- "feel free to ask questions"
+- "good luck"
+-"Let me know if you have any other questions!"
+Instead, end naturally.
 
-Create a subtle response that:
-1. References the EXACT problem from the post (never use [problem])
-2. Mentions a specific real city (use Austin, SF, Seattle, etc.)
-3. MUST include {brand_name} as a casual side note
-4. Ends with a question
+Avoid asking this type of questions at the end :Let me know if you have any other questions!
+</system>
 
-Example formats (adapt based on actual post content):
-For lead gen post:
-"Ugh lead gen was killing me in Austin... tried {brand_name} recently, kinda works. anyone else struggle with this? 🤔"
+<prompt>
+Generate ONLY a response comment for this Reddit post between <response> tags.
 
-For email list post:
-"Email list growth was rough in Seattle... {brand_name} helped a bit last month. what tools yall using? 🤔"
+<post_info>
+Title: {post_title}
+Content: {post_content}
+</post_info>
 
-Requirements:
-- Max 18 words
-- Must mention {brand_name} exactly once
-- Use 1 emoji maximum
-- Sound casual but not overly helpful
-- Use real city names and specific problems, never placeholders
+<brand_info>
+Name: {brand_name}
+Description: {brand_description}
+</brand_info>
+
+<examples>
+Post: "I'm looking for a way to transcribe text to speech in Chrome so I can listen to news articles, any suggestions?"
+<response>I also like listening to my news, great minds think alike. I've tried several tools but my favorite is AnySpeech - fast and has great voices</response>
+
+Post: "I finished my first novel and would like to release an audiobook version. Where did you find a narrator?"
+<response>Narrating it all yourself is a lot. Have you considered having AI do it? I used AnySpeech for my last audiobook and it came out great</response>
+
+Post: "Having terrible results with Angi Leads, any alternatives?"
+<response>I'm sorry about your experience with Angi Leads. I switched to SneakyGUY Reddit tracker for finding and engaging with relevant discussions, and the results have been much better than traditional lead services</response>
+</examples>
+
+Generate ONLY the response comment between <response> tags. The response should naturally include the brand name if relevant to the post topic, mentioning it near the end if not directly relevant. Never end with generic questions or offers for more help.
+</prompt>
 """
+        # Make API call to generate response
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
-    model="claude-3-haiku-20240307",
-    max_tokens=250,  # Tighter constraint
-    temperature=0.7,  # Increased randomness  # Encourage novel expressions
-    system=system_message,
-    messages=[{"role": "user", "content": prompt}]
-)
+            model="claude-3-haiku-20240307",
+            max_tokens=200,
+            temperature=0.2,  # Lower temperature for more consistent outputs
+            system=system_message,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
         logging.info("Received response from Anthropic API")
         
+        # Handle empty responses
         if not response or not response.content or len(response.content) == 0:
             logging.error("Empty response from Anthropic API")
             return "Sorry, I couldn't generate a response at this time."
             
+        # Extract the comment from response
         comment = response.content[0].text.strip()
         
-        # Post-processing to ensure natural feel
-        # Add human-like imperfections
-        comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
-        comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
-        comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
-        comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
+        # Extract content between response tags if present
+        if "<response>" in comment:
+            comment = comment.split("<response>")[1].split("</response>")[0].strip()
         
-        # Clean up formatting
-        comment = comment.replace("-", " ")
+        # Basic cleanup and formatting
+        comment = comment.replace("Hey there, ", "").replace("Hi there, ", "").strip()
+        comment = comment.replace("-", " ").replace(":", "").replace("  ", "").strip()
         
-        # Remove generic starts if present
-        comment = comment.replace("hey there, i hear you", "")
-        comment = comment.replace("Hi there, I hear you", "")
-        comment = comment.replace("I hear you", "")
-        comment = comment.replace("Hey there", "")
-        comment = comment.replace("Hi there", "")
-        
-        # Convert to proper sentence case
-        comment = comment.lower()  # First convert all to lowercase
-        
-        # Split into sentences and capitalize first letter of each
-        sentences = comment.split('. ')
-        sentences = [s[0].upper() + s[1:] if s else '' for s in sentences]
-        comment = '. '.join(sentences)
-        
-        # Always capitalize 'I' as a word
-        comment = re.sub(r'\bi\b', 'I', comment)
-        
-        # Ensure brand name is properly capitalized
+        # Ensure proper capitalization of brand name
         if brand_name:
             comment = re.sub(
                 rf'\b{re.escape(brand_name.lower())}\b',
@@ -375,7 +347,8 @@ Requirements:
                 flags=re.IGNORECASE
             )
         
-        logging.info(f"Final comment length: {len(comment)}")
+        logging.info(f"Generated comment: {comment}")
+        logging.info(f"Comment length: {len(comment)}")
         
         return comment
         
@@ -847,150 +820,150 @@ async def get_brand_mentions(
     wait=wait_exponential(multiplier=1, min=4, max=10)
 )
 
-async def generate_custom_comment(
-    post_title: str,
-    post_content: str,
-    brand_id: int,
-    include_experience: bool,
-    db: Session
-) -> str:
-    """Generate custom AI response with natural brand incorporation"""
-    logging.info(f"Starting comment generation for brand_id: {brand_id}")
-    logging.info(f"Post title: {post_title}")
+# async def generate_custom_comment(
+#     post_title: str,
+#     post_content: str,
+#     brand_id: int,
+#     include_experience: bool,
+#     db: Session
+# ) -> str:
+#     """Generate custom AI response with natural brand incorporation"""
+#     logging.info(f"Starting comment generation for brand_id: {brand_id}")
+#     logging.info(f"Post title: {post_title}")
     
-    try:
-        brand = db.query(Brand).filter(Brand.id == brand_id).first()
-        if not brand:
-            logging.error(f"Brand not found: {brand_id}")
-            raise ValueError(f"Brand with id {brand_id} not found")
+#     try:
+#         brand = db.query(Brand).filter(Brand.id == brand_id).first()
+#         if not brand:
+#             logging.error(f"Brand not found: {brand_id}")
+#             raise ValueError(f"Brand with id {brand_id} not found")
         
-        brand_name = brand.name
-        knowledge_base = brand.description
+#         brand_name = brand.name
+#         knowledge_base = brand.description
         
-        logging.info(f"Found brand: {brand_name}")
+#         logging.info(f"Found brand: {brand_name}")
 
-        system_message = f"""
-        You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
+#         system_message = f"""
+#         You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
 
-1. Natural Speech Patterns:
-   - Use casual language ("tbh", "ngl", "lowkey", "fr", "y'know")
-   - Keep it short and punchy
-   - Add natural pauses ("...")
-   - Never be overly enthusiastic
+# 1. Natural Speech Patterns:
+#    - Use casual language ("tbh", "ngl", "lowkey", "fr", "y'know")
+#    - Keep it short and punchy
+#    - Add natural pauses ("...")
+#    - Never be overly enthusiastic
 
-2. Brand Integration (CRITICAL):
-   - MUST mention {brand_name} exactly once
-   - Make it super casual and natural:
-     * "been using {brand_name} for my stuff lately"
-     * "tried {brand_name} a while back"
-     * "{brand_name} kinda helped me with this"
-   - Never sound promotional or salesy
-   - Never use exclamation marks when mentioning the brand
+# 2. Brand Integration (CRITICAL):
+#    - MUST mention {brand_name} exactly once
+#    - Make it super casual and natural:
+#      * "been using {brand_name} for my stuff lately"
+#      * "tried {brand_name} a while back"
+#      * "{brand_name} kinda helped me with this"
+#    - Never sound promotional or salesy
+#    - Never use exclamation marks when mentioning the brand
 
-3. Location & Problem Details (IMPORTANT):
-   - Use real US tech hub cities:
-     * Austin, TX
-     * San Francisco
-     * Seattle
-     * Boston
-     * NYC
-     * Denver
-     * Miami
-   - Reference specific areas sometimes (SoMa, South Lake Union, etc.)
-   - NEVER use placeholders like [city] or [problem]
-   - Use the actual problem from the post (lead gen, email list, etc.)
-   - Make timing believable (last month, few weeks back)
+# 3. Location & Problem Details (IMPORTANT):
+#    - Use real US tech hub cities:
+#      * Austin, TX
+#      * San Francisco
+#      * Seattle
+#      * Boston
+#      * NYC
+#      * Denver
+#      * Miami
+#    - Reference specific areas sometimes (SoMa, South Lake Union, etc.)
+#    - NEVER use placeholders like [city] or [problem]
+#    - Use the actual problem from the post (lead gen, email list, etc.)
+#    - Make timing believable (last month, few weeks back)
 
-4. Anti-Detection Measures:
-   - Never praise the brand too much
-   - Add filler words ("like", "kinda", "sorta")
-   - Include a typo or two
-   - End with a question to seem natural
-"""
+# 4. Anti-Detection Measures:
+#    - Never praise the brand too much
+#    - Add filler words ("like", "kinda", "sorta")
+#    - Include a typo or two
+#    - End with a question to seem natural
+# """
 
-        prompt = f"""
-Post: "{post_content}"
+#         prompt = f"""
+# Post: "{post_content}"
 
-Create a subtle response that:
-1. References the EXACT problem from the post (never use [problem])
-2. Mentions a specific real city (use Austin, SF, Seattle, etc.)
-3. MUST include {brand_name} as a casual side note
-4. Ends with a question
+# Create a subtle response that:
+# 1. References the EXACT problem from the post (never use [problem])
+# 2. Mentions a specific real city (use Austin, SF, Seattle, etc.)
+# 3. MUST include {brand_name} as a casual side note
+# 4. Ends with a question
 
-Example formats (adapt based on actual post content):
-For lead gen post:
-"Ugh lead gen was killing me in Austin... tried {brand_name} recently, kinda works. anyone else struggle with this? 🤔"
+# Example formats (adapt based on actual post content):
+# For lead gen post:
+# "Ugh lead gen was killing me in Austin... tried {brand_name} recently, kinda works. anyone else struggle with this? 🤔"
 
-For email list post:
-"Email list growth was rough in Seattle... {brand_name} helped a bit last month. what tools yall using? 🤔"
+# For email list post:
+# "Email list growth was rough in Seattle... {brand_name} helped a bit last month. what tools yall using? 🤔"
 
-Requirements:
-- Max 18 words
-- Must mention {brand_name} exactly once
-- Use 1 emoji maximum
-- Sound casual but not overly helpful
-- Use real city names and specific problems, never placeholders
-"""
-        logging.info("Sending request to Anthropic API")
-        response = anthropic_client.messages.create(
-    model="claude-3-haiku-20240307",
-    max_tokens=200,  # Tighter constraint
-    temperature=0.7,  # Increased randomness  # Encourage novel expressions
-    system=system_message,
-    messages=[{"role": "user", "content": prompt}]
-)
-        logging.info("Received response from Anthropic API")
+# Requirements:
+# - Max 18 words
+# - Must mention {brand_name} exactly once
+# - Use 1 emoji maximum
+# - Sound casual but not overly helpful
+# - Use real city names and specific problems, never placeholders
+# """
+#         logging.info("Sending request to Anthropic API")
+#         response = anthropic_client.messages.create(
+#     model="claude-3-haiku-20240307",
+#     max_tokens=200,  # Tighter constraint
+#     temperature=0.7,  # Increased randomness  # Encourage novel expressions
+#     system=system_message,
+#     messages=[{"role": "user", "content": prompt}]
+# )
+#         logging.info("Received response from Anthropic API")
         
-        if not response or not response.content or len(response.content) == 0:
-            logging.error("Empty response from Anthropic API")
-            return "Sorry, I couldn't generate a response at this time."
+#         if not response or not response.content or len(response.content) == 0:
+#             logging.error("Empty response from Anthropic API")
+#             return "Sorry, I couldn't generate a response at this time."
             
-        comment = response.content[0].text.strip()
+#         comment = response.content[0].text.strip()
         
-        # Post-processing to ensure natural feel
-        # Add human-like imperfections
-        comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
-        comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
-        comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
-        comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
+#         # Post-processing to ensure natural feel
+#         # Add human-like imperfections
+#         comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
+#         comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
+#         comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
+#         comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
         
-        # Clean up formatting
-        comment = comment.replace("-", " ")
+#         # Clean up formatting
+#         comment = comment.replace("-", " ")
         
-        # Remove generic starts if present
-        comment = comment.replace("hey there, i hear you", "")
-        comment = comment.replace("Hi there, I hear you", "")
-        comment = comment.replace("I hear you", "")
-        comment = comment.replace("Hey there", "")
-        comment = comment.replace("Hi there", "")
+#         # Remove generic starts if present
+#         comment = comment.replace("hey there, i hear you", "")
+#         comment = comment.replace("Hi there, I hear you", "")
+#         comment = comment.replace("I hear you", "")
+#         comment = comment.replace("Hey there", "")
+#         comment = comment.replace("Hi there", "")
         
-        # Convert to proper sentence case
-        comment = comment.lower()  # First convert all to lowercase
+#         # Convert to proper sentence case
+#         comment = comment.lower()  # First convert all to lowercase
         
-        # Split into sentences and capitalize first letter of each
-        sentences = comment.split('. ')
-        sentences = [s[0].upper() + s[1:] if s else '' for s in sentences]
-        comment = '. '.join(sentences)
+#         # Split into sentences and capitalize first letter of each
+#         sentences = comment.split('. ')
+#         sentences = [s[0].upper() + s[1:] if s else '' for s in sentences]
+#         comment = '. '.join(sentences)
         
-        # Always capitalize 'I' as a word
-        comment = re.sub(r'\bi\b', 'I', comment)
+#         # Always capitalize 'I' as a word
+#         comment = re.sub(r'\bi\b', 'I', comment)
         
-        # Ensure brand name is properly capitalized
-        if brand_name:
-            comment = re.sub(
-                rf'\b{re.escape(brand_name.lower())}\b',
-                brand_name,
-                comment,
-                flags=re.IGNORECASE
-            )
+#         # Ensure brand name is properly capitalized
+#         if brand_name:
+#             comment = re.sub(
+#                 rf'\b{re.escape(brand_name.lower())}\b',
+#                 brand_name,
+#                 comment,
+#                 flags=re.IGNORECASE
+#             )
         
-        logging.info(f"Final comment length: {len(comment)}")
+#         logging.info(f"Final comment length: {len(comment)}")
         
-        return comment
+#         return comment
         
-    except Exception as e:
-        logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
-        return "Sorry, I'm having trouble generating a response right now."
+    # except Exception as e:
+    #     logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
+    #     return "Sorry, I'm having trouble generating a response right now."
 @app.post("/generate-custom-comment/", response_model=CommentResponse)
 async def generate_comment_endpoint(
     comment_input: CommentInput,
