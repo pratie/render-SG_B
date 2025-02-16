@@ -1,3 +1,4 @@
+# Environment files
 .env
 env/
 **/env/
@@ -11,4 +12,21 @@ fresh_env/
 .DS_Store
 
 # Database files
-reddit_analysis.db"
+reddit_analysis.db
+reddit_analysis_prod_backup.db
+reddit_analysis_feb16.db
+#any other database files
+reddit_analysis.db
+
+# Python files
+check_columns.py
+tablest.py
+streamlit_new.py
+tablest.py
+main_backup.py
+
+# User data files
+users_local.txt
+users_prod.txt
+
+# Node modules

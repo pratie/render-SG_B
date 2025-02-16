@@ -1,33 +1,35 @@
 # app/crud.py
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
-import models
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-from fastapi import HTTPException
+from sqlalchemy import func, desc
+from datetime import datetime, timedelta
 import json
+from typing import List, Optional, Dict, Any
+import logging
+
+from models import User, Brand, RedditMention, RedditComment
+from fastapi import HTTPException
 
 class UserCRUD:
     @staticmethod
-    def get_user_by_email(db: Session, email: str) -> Optional[models.User]:
+    def get_user_by_email(db: Session, email: str) -> Optional[User]:
         """Get user by email"""
-        return db.query(models.User).filter(models.User.email == email).first()
+        return db.query(User).filter(User.email == email).first()
 
     @staticmethod
-    def create_user(db: Session, email: str) -> models.User:
+    def create_user(db: Session, email: str) -> User:
         """Create new user if doesn't exist"""
         existing_user = UserCRUD.get_user_by_email(db, email)
         if existing_user:
             return existing_user
             
-        db_user = models.User(email=email)
+        db_user = User(email=email)
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
         return db_user
 
     @staticmethod
-    def update_last_login(db: Session, email: str) -> models.User:
+    def update_last_login(db: Session, email: str) -> User:
         """Update user's last login time"""
         db_user = UserCRUD.get_user_by_email(db, email)
         if db_user:
@@ -42,10 +44,10 @@ class BrandCRUD:
         db: Session,
         brand_input: dict,
         user_email: str
-    ) -> models.Brand:
+    ) -> Brand:
         """Create a new brand"""
         try:
-            db_brand = models.Brand(
+            db_brand = Brand(
                 user_email=user_email,
                 name=brand_input["name"],
                 description=brand_input["description"],
@@ -62,22 +64,22 @@ class BrandCRUD:
             raise HTTPException(status_code=400, detail=str(e))
 
     @staticmethod
-    def get_brand(db: Session, brand_id: int, user_email: str) -> Optional[models.Brand]:
+    def get_brand(db: Session, brand_id: int, user_email: str) -> Optional[Brand]:
         """Get a specific brand by ID and user email"""
         user = UserCRUD.get_user_by_email(db, user_email)
         if not user:
             return None
-        return db.query(models.Brand).filter(models.Brand.id == brand_id, models.Brand.user_email == user_email).first()
+        return db.query(Brand).filter(Brand.id == brand_id, Brand.user_email == user_email).first()
 
     @staticmethod
-    def get_user_brands(db: Session, user_email: str, skip: int = 0, limit: int = 50) -> List[models.Brand]:
+    def get_user_brands(db: Session, user_email: str, skip: int = 0, limit: int = 50) -> List[Brand]:
         """Get all brands for a user"""
-        return db.query(models.Brand).filter(models.Brand.user_email == user_email).offset(skip).limit(limit).all()
+        return db.query(Brand).filter(Brand.user_email == user_email).offset(skip).limit(limit).all()
 
     @staticmethod
-    def update_brand_keywords(db: Session, brand_id: int, keywords: List[str]) -> Optional[models.Brand]:
+    def update_brand_keywords(db: Session, brand_id: int, keywords: List[str]) -> Optional[Brand]:
         """Update brand keywords"""
-        brand = db.query(models.Brand).filter(models.Brand.id == brand_id).first()
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if not brand:
             return None
             
@@ -88,9 +90,9 @@ class BrandCRUD:
         return brand
 
     @staticmethod
-    def update_brand_subreddits(db: Session, brand_id: int, subreddits: List[str]) -> Optional[models.Brand]:
+    def update_brand_subreddits(db: Session, brand_id: int, subreddits: List[str]) -> Optional[Brand]:
         """Update brand subreddits"""
-        brand = db.query(models.Brand).filter(models.Brand.id == brand_id).first()
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if not brand:
             return None
             
@@ -106,11 +108,11 @@ class BrandCRUD:
         brand_id: int,
         brand_input: dict,
         user_email: str
-    ) -> Optional[models.Brand]:
+    ) -> Optional[Brand]:
         """Update brand details"""
-        brand = db.query(models.Brand).filter(
-            models.Brand.id == brand_id,
-            models.Brand.user_email == user_email
+        brand = db.query(Brand).filter(
+            Brand.id == brand_id,
+            Brand.user_email == user_email
         ).first()
         
         if not brand:
@@ -133,7 +135,7 @@ class BrandCRUD:
     @staticmethod
     def delete_brand(db: Session, brand_id: int) -> bool:
         """Delete a brand"""
-        brand = db.query(models.Brand).filter(models.Brand.id == brand_id).first()
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if not brand:
             return False
         db.delete(brand)
@@ -142,7 +144,7 @@ class BrandCRUD:
 
 class RedditMentionCRUD:
     @staticmethod
-    def create_mention(db: Session, mention: models.RedditMention) -> models.RedditMention:
+    def create_mention(db: Session, mention: RedditMention) -> RedditMention:
         """Create a new Reddit mention"""
         db.add(mention)
         db.commit()
@@ -155,12 +157,12 @@ class RedditMentionCRUD:
         brand_id: int,
         skip: int = 0,
         limit: int = 500
-    ) -> List[models.RedditMention]:
+    ) -> List[RedditMention]:
         """Get all mentions for a brand"""
-        mentions = db.query(models.RedditMention).filter(
-            models.RedditMention.brand_id == brand_id
+        mentions = db.query(RedditMention).filter(
+            RedditMention.brand_id == brand_id
         ).order_by(
-            desc(models.RedditMention.created_at)
+            desc(RedditMention.created_at)
         ).offset(skip).limit(limit).all()
         
         # Ensure all mentions have required fields with defaults
@@ -197,3 +199,34 @@ class RedditMentionCRUD:
             raise e
         
         return mentions
+
+class RedditCommentCRUD:
+    @staticmethod
+    def create_comment(db: Session, brand_id: int, post_id: str, post_url: str, comment_text: str, comment_url: str) -> RedditComment:
+        """Create a new Reddit comment record"""
+        comment = RedditComment(
+            brand_id=brand_id,
+            post_id=post_id,
+            post_url=post_url,
+            comment_text=comment_text,
+            comment_url=comment_url
+        )
+        db.add(comment)
+        db.commit()
+        db.refresh(comment)
+        return comment
+
+    @staticmethod
+    def get_comment_by_post_id(db: Session, brand_id: int, post_id: str) -> Optional[RedditComment]:
+        """Get a comment by post ID and brand ID"""
+        return db.query(RedditComment).filter(
+            RedditComment.brand_id == brand_id,
+            RedditComment.post_id == post_id
+        ).first()
+
+    @staticmethod
+    def get_brand_comments(db: Session, brand_id: int, skip: int = 0, limit: int = 100) -> List[RedditComment]:
+        """Get all comments for a brand"""
+        return db.query(RedditComment).filter(
+            RedditComment.brand_id == brand_id
+        ).offset(skip).limit(limit).all()

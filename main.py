@@ -28,9 +28,9 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from database import get_db, init_db
-from crud import UserCRUD, BrandCRUD, RedditMentionCRUD
+from crud import UserCRUD, BrandCRUD, RedditMentionCRUD, RedditCommentCRUD
 from models import (
-    User, Brand, RedditMention, UserBase, UserCreate, UserResponse,
+    User, Brand, RedditMention, RedditComment, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
     KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse,
     PostCommentInput, PostCommentResponse
@@ -816,193 +816,14 @@ async def get_brand_mentions(
         logging.error(f"Error getting mentions: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10)
-)
-
-# async def generate_custom_comment(
-#     post_title: str,
-#     post_content: str,
-#     brand_id: int,
-#     include_experience: bool,
-#     db: Session
-# ) -> str:
-#     """Generate custom AI response with natural brand incorporation"""
-#     logging.info(f"Starting comment generation for brand_id: {brand_id}")
-#     logging.info(f"Post title: {post_title}")
-    
-#     try:
-#         brand = db.query(Brand).filter(Brand.id == brand_id).first()
-#         if not brand:
-#             logging.error(f"Brand not found: {brand_id}")
-#             raise ValueError(f"Brand with id {brand_id} not found")
-        
-#         brand_name = brand.name
-#         knowledge_base = brand.description
-        
-#         logging.info(f"Found brand: {brand_name}")
-
-#         system_message = f"""
-#         You're a seasoned Redditor (mid-30s) sharing authentic advice. Essential rules:
-
-# 1. Natural Speech Patterns:
-#    - Use casual language ("tbh", "ngl", "lowkey", "fr", "y'know")
-#    - Keep it short and punchy
-#    - Add natural pauses ("...")
-#    - Never be overly enthusiastic
-
-# 2. Brand Integration (CRITICAL):
-#    - MUST mention {brand_name} exactly once
-#    - Make it super casual and natural:
-#      * "been using {brand_name} for my stuff lately"
-#      * "tried {brand_name} a while back"
-#      * "{brand_name} kinda helped me with this"
-#    - Never sound promotional or salesy
-#    - Never use exclamation marks when mentioning the brand
-
-# 3. Location & Problem Details (IMPORTANT):
-#    - Use real US tech hub cities:
-#      * Austin, TX
-#      * San Francisco
-#      * Seattle
-#      * Boston
-#      * NYC
-#      * Denver
-#      * Miami
-#    - Reference specific areas sometimes (SoMa, South Lake Union, etc.)
-#    - NEVER use placeholders like [city] or [problem]
-#    - Use the actual problem from the post (lead gen, email list, etc.)
-#    - Make timing believable (last month, few weeks back)
-
-# 4. Anti-Detection Measures:
-#    - Never praise the brand too much
-#    - Add filler words ("like", "kinda", "sorta")
-#    - Include a typo or two
-#    - End with a question to seem natural
-# """
-
-#         prompt = f"""
-# Post: "{post_content}"
-
-# Create a subtle response that:
-# 1. References the EXACT problem from the post (never use [problem])
-# 2. Mentions a specific real city (use Austin, SF, Seattle, etc.)
-# 3. MUST include {brand_name} as a casual side note
-# 4. Ends with a question
-
-# Example formats (adapt based on actual post content):
-# For lead gen post:
-# "Ugh lead gen was killing me in Austin... tried {brand_name} recently, kinda works. anyone else struggle with this? 🤔"
-
-# For email list post:
-# "Email list growth was rough in Seattle... {brand_name} helped a bit last month. what tools yall using? 🤔"
-
-# Requirements:
-# - Max 18 words
-# - Must mention {brand_name} exactly once
-# - Use 1 emoji maximum
-# - Sound casual but not overly helpful
-# - Use real city names and specific problems, never placeholders
-# """
-#         logging.info("Sending request to Anthropic API")
-#         response = anthropic_client.messages.create(
-#     model="claude-3-haiku-20240307",
-#     max_tokens=200,  # Tighter constraint
-#     temperature=0.7,  # Increased randomness  # Encourage novel expressions
-#     system=system_message,
-#     messages=[{"role": "user", "content": prompt}]
-# )
-#         logging.info("Received response from Anthropic API")
-        
-#         if not response or not response.content or len(response.content) == 0:
-#             logging.error("Empty response from Anthropic API")
-#             return "Sorry, I couldn't generate a response at this time."
-            
-#         comment = response.content[0].text.strip()
-        
-#         # Post-processing to ensure natural feel
-#         # Add human-like imperfections
-#         comment = re.sub(r"\b(I|You)\b", lambda m: m.group().lower(), comment)  # 80% lowercase
-#         comment = re.sub(r"\.(\s|$)", lambda m: random.choice(["...", "!", " -"]), comment)  # Natural punctuation
-#         comment = re.sub(r"\bactually\b", "kinda", comment)  # Casual replacements
-#         comment = re.sub(r"\bkinda\b", "sorta", comment)  # Casual replacements
-        
-#         # Clean up formatting
-#         comment = comment.replace("-", " ")
-        
-#         # Remove generic starts if present
-#         comment = comment.replace("hey there, i hear you", "")
-#         comment = comment.replace("Hi there, I hear you", "")
-#         comment = comment.replace("I hear you", "")
-#         comment = comment.replace("Hey there", "")
-#         comment = comment.replace("Hi there", "")
-        
-#         # Convert to proper sentence case
-#         comment = comment.lower()  # First convert all to lowercase
-        
-#         # Split into sentences and capitalize first letter of each
-#         sentences = comment.split('. ')
-#         sentences = [s[0].upper() + s[1:] if s else '' for s in sentences]
-#         comment = '. '.join(sentences)
-        
-#         # Always capitalize 'I' as a word
-#         comment = re.sub(r'\bi\b', 'I', comment)
-        
-#         # Ensure brand name is properly capitalized
-#         if brand_name:
-#             comment = re.sub(
-#                 rf'\b{re.escape(brand_name.lower())}\b',
-#                 brand_name,
-#                 comment,
-#                 flags=re.IGNORECASE
-#             )
-        
-#         logging.info(f"Final comment length: {len(comment)}")
-        
-#         return comment
-        
-    # except Exception as e:
-    #     logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
-    #     return "Sorry, I'm having trouble generating a response right now."
-@app.post("/generate-custom-comment/", response_model=CommentResponse)
-async def generate_comment_endpoint(
-    comment_input: CommentInput,
-    request: Request,
-    current_user_email: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Generate a custom comment for a Reddit post.
-    Requires authentication.
-    """
-    logging.info(f"Received comment generation request from user: {current_user_email}")
-    
-    try:
-        comment = await generate_custom_comment(
-            post_title=comment_input.post_title,
-            post_content=comment_input.post_content,
-            brand_id=comment_input.brand_id,
-            include_experience=comment_input.include_experience,
-            db=db
-        )
-        
-        if not comment:
-            logging.error("Empty comment generated")
-            raise HTTPException(status_code=500, detail="Failed to generate comment")
-            
-        logging.info("Successfully generated comment")
-        return CommentResponse(comment=comment)
-        
-    except ValueError as ve:
-        logging.error(f"ValueError in generate_comment_endpoint: {str(ve)}")
-        raise HTTPException(status_code=404, detail=str(ve))
-    except Exception as e:
-        logging.error(f"Error in generate_comment_endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Error generating comment")
+class RedditCommentError(Exception):
+    """Custom exception for Reddit comment errors"""
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
 
 @app.post("/post-reddit-comment/", response_model=PostCommentResponse, tags=["reddit"])
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 async def post_reddit_comment(
     comment_input: PostCommentInput,
     request: Request,
@@ -1024,40 +845,62 @@ async def post_reddit_comment(
                 detail="Brand not found or unauthorized access"
             )
 
-        # Initialize Reddit client
-        reddit = praw.Reddit(
-            client_id=os.getenv("REDDIT_CLIENT_ID"),
-            client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-            user_agent=os.getenv("REDDIT_USER_AGENT", "RedditAnalyzer/1.0"),
-            username=os.getenv("REDDIT_USERNAME"),
-            password=os.getenv("REDDIT_PASSWORD")
-        )
+        # Extract post ID from URL
+        match = re.search(r'comments/([a-z0-9]+)/', comment_input.post_url, re.I)
+        if not match:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Reddit post URL"
+            )
+        
+        post_id = match.group(1)
+        
+        # Check if we've already commented on this post
+        existing_comment = db.query(RedditComment).filter(
+            RedditComment.brand_id == comment_input.brand_id,
+            RedditComment.post_id == post_id
+        ).first()
+        
+        if existing_comment:
+            return PostCommentResponse(
+                comment=existing_comment.comment_text,
+                comment_url=existing_comment.comment_url,
+                status="already_exists"
+            )
 
-        logging.info(f"Attempting to post comment on: {comment_input.post_url}")
-
-        try:
-            # Extract submission ID from URL
-            match = re.search(r'comments/([a-z0-9]+)/', comment_input.post_url, re.I)
-            if not match:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid Reddit post URL"
-                )
+        # Run the Reddit operations in a thread pool
+        def post_to_reddit():
+            reddit = praw.Reddit(
+                client_id=os.getenv("REDDIT_CLIENT_ID"),
+                client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
+                user_agent=os.getenv("REDDIT_USER_AGENT", "RedditAnalyzer/1.0"),
+                username=os.getenv("REDDIT_USERNAME"),
+                password=os.getenv("REDDIT_PASSWORD")
+            )
             
-            submission_id = match.group(1)
-            submission = reddit.submission(id=submission_id)
-
-            # Verify the submission exists and matches the input
+            submission = reddit.submission(id=post_id)
             if not submission or submission.title != comment_input.post_title:
                 raise HTTPException(
                     status_code=400,
                     detail="Reddit post not found or title mismatch"
                 )
-
-            # Post the comment
-            comment = submission.reply(comment_input.comment_text)
             
-            logging.info(f"Successfully posted comment. URL: {comment.permalink}")
+            return submission.reply(comment_input.comment_text)
+
+        try:
+            loop = asyncio.get_event_loop()
+            comment = await loop.run_in_executor(None, post_to_reddit)
+            
+            # Save the comment to our database
+            reddit_comment = RedditComment(
+                brand_id=comment_input.brand_id,
+                post_id=post_id,
+                post_url=comment_input.post_url,
+                comment_text=comment_input.comment_text,
+                comment_url=f"https://reddit.com{comment.permalink}"
+            )
+            db.add(reddit_comment)
+            db.commit()
 
             return PostCommentResponse(
                 comment=comment_input.comment_text,
@@ -1065,32 +908,28 @@ async def post_reddit_comment(
                 status="success"
             )
 
-        except prawcore.exceptions.Forbidden:
-            logging.error("Reddit authentication failed or insufficient permissions")
+        except prawcore.exceptions.Forbidden as e:
             raise HTTPException(
                 status_code=403,
-                detail="Reddit authentication failed or insufficient permissions"
+                detail=f"Reddit authentication failed or insufficient permissions: {str(e)}"
             )
-        except prawcore.exceptions.NotFound:
-            logging.error("Reddit post not found")
+        except prawcore.exceptions.NotFound as e:
             raise HTTPException(
                 status_code=404,
-                detail="Reddit post not found"
+                detail=f"Reddit post not found: {str(e)}"
             )
-        except prawcore.exceptions.ServerError:
-            logging.error("Reddit server error")
+        except prawcore.exceptions.ServerError as e:
+            # This is a server error, so we'll let it be retried
             raise HTTPException(
                 status_code=502,
-                detail="Reddit server error"
+                detail=f"Reddit server error: {str(e)}"
             )
-        except prawcore.exceptions.TooLarge:
-            logging.error("Comment too large")
+        except prawcore.exceptions.TooLarge as e:
             raise HTTPException(
                 status_code=400,
-                detail="Comment is too long for Reddit"
+                detail=f"Comment is too long for Reddit: {str(e)}"
             )
         except Exception as e:
-            logging.error(f"Error interacting with Reddit: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to post comment: {str(e)}"
@@ -1099,11 +938,56 @@ async def post_reddit_comment(
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Unexpected error: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail="An unexpected error occurred"
         )
+
+@app.post("/generate-comment/", response_model=CommentResponse)
+async def generate_comment_endpoint(
+    comment_input: CommentInput,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Generate a custom comment for a Reddit post.
+    Requires authentication.
+    """
+    try:
+        # Generate the comment
+        comment = await generate_custom_comment(
+            post_title=comment_input.post_title,
+            post_content=comment_input.post_content,
+            brand_id=comment_input.brand_id,
+            include_experience=comment_input.include_experience,
+            db=db
+        )
+        
+        if not comment:
+            logging.error("Empty comment generated")
+            raise HTTPException(status_code=500, detail="Failed to generate comment")
+        
+        # Store the generated comment in the database
+        new_comment = RedditComment(
+            brand_id=comment_input.brand_id,
+            post_id="",  # Will be filled when actually posted
+            post_url="",  # Will be filled when actually posted
+            comment_text=comment,
+            comment_url="",  # Will be filled when actually posted
+            created_at=datetime.utcnow()
+        )
+        db.add(new_comment)
+        db.commit()
+            
+        logging.info("Successfully generated and stored comment")
+        return CommentResponse(comment=comment)
+        
+    except ValueError as ve:
+        logging.error(f"ValueError in generate_comment_endpoint: {str(ve)}")
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        logging.error(f"Error in generate_comment_endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error generating comment")
 
 if __name__ == "__main__":
     import uvicorn

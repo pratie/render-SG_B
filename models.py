@@ -36,8 +36,10 @@ class Brand(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Relationships
     user = relationship("User", back_populates="brands")
     mentions = relationship("RedditMention", back_populates="brand", cascade="all, delete-orphan")
+    comments = relationship("RedditComment", back_populates="brand", cascade="all, delete-orphan")
 
     @property
     def keywords_list(self) -> List[str]:
@@ -120,6 +122,23 @@ class RedditMention(Base):
     def matching_keywords_list(self, value: List[str]) -> None:
         """Store keywords as a JSON string"""
         self.matching_keywords = json.dumps(value) if value else "[]"
+
+class RedditComment(Base):
+    __tablename__ = "reddit_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    brand_id = Column(Integer, ForeignKey("brands.id"))
+    post_id = Column(String, index=True)  # Reddit post ID
+    post_url = Column(String)
+    comment_text = Column(Text)
+    comment_url = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    brand = relationship("Brand", back_populates="comments")
+
+    class Config:
+        from_attributes = True
 
 # Pydantic Models for API
 class UserBase(BaseModel):

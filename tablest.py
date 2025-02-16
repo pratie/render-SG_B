@@ -5,7 +5,7 @@ from datetime import datetime
 import re
 
 # Initialize connection string
-DB_PATH = 'reddit_analysis_feb141.db'
+DB_PATH = 'reddit_analysis.db'
 
 def validate_email(email):
     """Validate email format using regex pattern."""
