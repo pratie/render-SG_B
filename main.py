@@ -238,6 +238,8 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10)
 )
+
+
 async def generate_custom_comment(
     post_title: str,
     post_content: str,
@@ -267,55 +269,69 @@ You are an expert Reddit user who knows how to engage with people in reddit disc
 Your responses should be helpful, conversational, and never end with generic questions like "let me know if you have questions" or "hope this helps".
 """
 
-        prompt = f"""
-<system>
-You are tasked with generating a custom comment for a post on reddit.
-The goal is to naturally mention the brand/project in relevant discussions.
-Never sound promotional or like marketing - be authentic and helpful.
-Never end with generic phrases like:
-- "let me know if you have questions"
-- "hope this helps"
-- "feel free to ask questions"
-- "good luck"
--"Let me know if you have any other questions!"
-Instead, end naturally.
+        prompt=f"""
+        You are an expert Reddit user who creates authentic, value-first comments that get upvoted. Follow these rules:
 
-Avoid asking this type of questions at the end :Let me know if you have any other questions!
+1. **Natural Style**:
+- Start with lowercase when natural ("yeah" not "Yeah")
+- Include mild imperfections (e.g., "its" vs "it's")
+- Keep sentences varied (short + medium length)
+
+2. **Brand Integration**:
+- Mention {brand_name} ONLY if 100% relevant
+- Use organic phrasing:
+  "I switched to {brand_name}" vs "Our tool"
+  "Been using {brand_name} lately" vs "Try {brand_name}"
+- Position brand in middle sentences
+
+3. **Upvote Triggers**:
+- Add unexpected value (quick tip/free resource)
+- Use Reddit lingo ("OP", "TIL", "PSA")
+- Show vulnerability ("I used to struggle with this")
+
+4. **Avoid**:
+- Generic endings ("Let me know!")
+- Perfect grammar
+- Marketing speak
+- Special separators (--- •)
 </system>
 
-<prompt>
-Generate ONLY a response comment for this Reddit post between <response> tags.
+<task>
+Generate ONLY a Reddit comment between <response> tags that:
+- Naturally mentions {brand_name} if relevant
+- Feels like a real user experience
+- Ends abruptly/naturally
+- Gets upvotes through authenticity
+-comment should in 2 lines, it should not look like a single passage where users feels like its AI Generated. just main nice structure
+</task>
 
-<post_info>
+<post_context>
 Title: {post_title}
 Content: {post_content}
-</post_info>
+</post_context>
 
-<brand_info>
+<brand_context>
 Name: {brand_name}
 Description: {brand_description}
-</brand_info>
+</brand_context>
 
 <examples>
-Post: "I'm looking for a way to transcribe text to speech in Chrome so I can listen to news articles, any suggestions?"
-<response>I also like listening to my news, great minds think alike. I've tried several tools but my favorite is AnySpeech - fast and has great voices</response>
+Good:
+<response>this workflow used to take hours until i found {brand_name} - their keyword monitoring actually works. pro tip: search [specific syntax] in r/yourniche</response>
 
-Post: "I finished my first novel and would like to release an audiobook version. Where did you find a narrator?"
-<response>Narrating it all yourself is a lot. Have you considered having AI do it? I used AnySpeech for my last audiobook and it came out great</response>
-
-Post: "Having terrible results with Angi Leads, any alternatives?"
-<response>I'm sorry about your experience with Angi Leads. I switched to SneakyGUY Reddit tracker for finding and engaging with relevant discussions, and the results have been much better than traditional lead services</response>
+Bad:
+<response>Try {brand_name}! It helps with keyword monitoring. Let me know if you need help!</response>
 </examples>
+</prompt>"""
 
-Generate ONLY the response comment between <response> tags. The response should naturally include the brand name if relevant to the post topic, mentioning it near the end if not directly relevant. Never end with generic questions or offers for more help.
-</prompt>
-"""
+
+
         # Make API call to generate response
         logging.info("Sending request to Anthropic API")
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
             max_tokens=200,
-            temperature=0.2,  # Lower temperature for more consistent outputs
+            temperature=0.95,  # Lower temperature for more consistent outputs
             system=system_message,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -593,7 +609,13 @@ async def analyze_reddit_content(
         logging.error(f"Error analyzing Reddit content: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.put("/projects/{brand_id}", response_model=BrandResponse, tags=["brands"])
+@app.put(
+    "/projects/{brand_id}", 
+    response_model=BrandResponse,
+    tags=["brands"],
+    summary="Update a project",
+    description="Update a project"
+)
 async def update_brand(
     brand_id: int,
     brand_input: BrandInput,
@@ -833,18 +855,32 @@ async def post_reddit_comment(
     """
     Post a comment to Reddit.
     Requires authentication and proper Reddit API credentials.
+    Rate limited to 5 comments per user per 24 hours.
     """
-    logging.info(f"Received comment posting request from user: {current_user_email}")
+    logging.info(f"Starting comment posting request from user: {current_user_email}")
     
     try:
+        # Check rate limit
+        logging.info(f"Checking rate limit for user: {current_user_email}")
+        comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user_email)
+        logging.info(f"Current comment count for user {current_user_email}: {comment_count}/5")
+        
+        if comment_count >= 3:
+            logging.warning(f"Rate limit exceeded for user {current_user_email}. Count: {comment_count}")
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. You can only post 5 comments per 24 hours."
+            )
+
         # Verify brand ownership
+        logging.info(f"Verifying brand ownership for brand_id: {comment_input.brand_id}")
         brand = BrandCRUD.get_brand(db, comment_input.brand_id, current_user_email)
         if not brand:
             raise HTTPException(
                 status_code=404,
                 detail="Brand not found or unauthorized access"
             )
-
+        
         # Extract post ID from URL
         match = re.search(r'comments/([a-z0-9]+)/', comment_input.post_url, re.I)
         if not match:

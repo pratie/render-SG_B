@@ -230,3 +230,15 @@ class RedditCommentCRUD:
         return db.query(RedditComment).filter(
             RedditComment.brand_id == brand_id
         ).offset(skip).limit(limit).all()
+
+    @staticmethod
+    def get_user_comment_count_last_24h(db: Session, user_email: str) -> int:
+        """Get the number of comments made by a user in the last 24 hours"""
+        yesterday = datetime.utcnow() - timedelta(days=1)
+        return (
+            db.query(RedditComment)
+            .join(Brand)
+            .filter(Brand.user_email == user_email)
+            .filter(RedditComment.created_at >= yesterday)
+            .count()
+        )
