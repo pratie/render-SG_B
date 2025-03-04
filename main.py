@@ -531,7 +531,7 @@ async def analyze_reddit_content(
                         # Default to month if time_period is not specified
                         #time_period = analysis_input.time_period or "year"
                         time_period = "year"
-                        limit=1000
+                        limit=600
                         posts = subreddit.top(time_period, limit=limit)
                         print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",limit)
                         print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",time_period)
