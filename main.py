@@ -155,6 +155,7 @@ def get_keywords(brand_name: str, description: str) -> list[str]:
         one per line, without any additional text.
         
         Avoid very generic keywords like ai, technology,saas and reddit etc
+        NOTE : Please avoid "-" (hyphens) in keywords
         """
         
         response = anthropic_client.messages.create(
@@ -531,7 +532,7 @@ async def analyze_reddit_content(
                         # Default to month if time_period is not specified
                         #time_period = analysis_input.time_period or "year"
                         time_period = "year"
-                        limit=600
+                        limit=999
                         posts = subreddit.top(time_period, limit=limit)
                         print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",limit)
                         print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",time_period)
