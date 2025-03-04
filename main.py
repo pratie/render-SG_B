@@ -42,7 +42,7 @@ from routers.payment import router as payment_router
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -123,7 +123,7 @@ anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 reddit_config = {
     "client_id": os.getenv("REDDIT_CLIENT_ID"),
     "client_secret": os.getenv("REDDIT_CLIENT_SECRET"),
-    "user_agent": "RedditAnalyzer/1.0"
+    "user_agent": "apptest"
 }
 
 # Utility functions
@@ -463,6 +463,8 @@ async def analyze_reddit_content(
     Requires authentication.
     """
     try:
+        
+        print("\n analysis_input>>>>:\n",analysis_input)
         # Verify brand ownership and get latest data
         brand = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
         if not brand:
@@ -527,8 +529,13 @@ async def analyze_reddit_content(
                     # Get posts from the subreddit based on time period
                     try:
                         # Default to month if time_period is not specified
-                        time_period = analysis_input.time_period or "month"
-                        posts = subreddit.top(time_period, limit=analysis_input.limit)
+                        #time_period = analysis_input.time_period or "year"
+                        time_period = "year"
+                        limit=1000
+                        posts = subreddit.top(time_period, limit=limit)
+                        print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",limit)
+                        print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",time_period)
+                        #print("posts>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n\n",len(posts))
                     except Exception as e:
                         logging.error(f"Error fetching posts from {clean_subreddit_name}: {str(e)}")
                         continue
@@ -545,7 +552,7 @@ async def analyze_reddit_content(
                             # Generate AI suggested comment and relevance score
                             #test_comment, relevance_score = await generate_comment(post.title, post.selftext, brand.id, db)
                             relevance_score= generate_relevance_score(post.title, post.selftext, brand.id, db)
-                            print("\n relavence score>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n\n",relevance_score)
+                            print("\n relavence score:\n",relevance_score)
                             suggested_comment = "This feature will be live soon! Stay tuned!😊"
                             
                             post_data = {
@@ -807,7 +814,7 @@ async def get_brand_mentions(
     
     try:
         mentions = RedditMentionCRUD.get_brand_mentions(db, brand_id, skip=skip, limit=limit)
-        logging.info(f"Retrieved mentions: {[vars(m) for m in mentions]}")
+        #logging.info(f"Retrieved mentions: {[vars(m) for m in mentions]}")
         
         # Convert each mention to a dict and validate required fields
         mention_dicts = []
@@ -832,7 +839,7 @@ async def get_brand_mentions(
             }
             mention_dicts.append(mention_dict)
         
-        logging.info(f"Converted mentions: {mention_dicts}")
+        #logging.info(f"Converted mentions: {mention_dicts}")
         return [RedditMentionResponse(**m) for m in mention_dicts]
     except Exception as e:
         logging.error(f"Error getting mentions: {str(e)}")
@@ -865,7 +872,7 @@ async def post_reddit_comment(
         comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user_email)
         logging.info(f"Current comment count for user {current_user_email}: {comment_count}/5")
         
-        if comment_count >= 3:
+        if comment_count >= 5:  
             logging.warning(f"Rate limit exceeded for user {current_user_email}. Count: {comment_count}")
             raise HTTPException(
                 status_code=429,
@@ -906,37 +913,90 @@ async def post_reddit_comment(
 
         # Run the Reddit operations in a thread pool
         def post_to_reddit():
-            reddit = praw.Reddit(
-                client_id=os.getenv("REDDIT_CLIENT_ID"),
-                client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-                user_agent=os.getenv("REDDIT_USER_AGENT", "RedditAnalyzer/1.0"),
-                username=os.getenv("REDDIT_USERNAME"),
-                password=os.getenv("REDDIT_PASSWORD")
-            )
-            
-            submission = reddit.submission(id=post_id)
-            if not submission or submission.title != comment_input.post_title:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Reddit post not found or title mismatch"
-                )
-            
-            return submission.reply(comment_input.comment_text)
+            try:
+                logging.info("Initializing Reddit client...")
+                reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
+                reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+                reddit_user_agent = os.getenv("REDDIT_USER_AGENT")
+                reddit_username = os.getenv("REDDIT_USERNAME")
+                reddit_password = os.getenv("REDDIT_PASSWORD")
 
+                # Validate Reddit credentials
+                if not all([reddit_client_id, reddit_client_secret, reddit_username, reddit_password]):
+                    logging.error("Missing Reddit credentials")
+                    missing_creds = [
+                        cred for cred, val in {
+                            "REDDIT_CLIENT_ID": reddit_client_id,
+                            "REDDIT_CLIENT_SECRET": reddit_client_secret,
+                            "REDDIT_USERNAME": reddit_username,
+                            "REDDIT_PASSWORD": reddit_password
+                        }.items() if not val
+                    ]
+                    raise ValueError(f"Missing Reddit credentials: {', '.join(missing_creds)}")
+
+                logging.info(f"Attempting to authenticate with Reddit as user: {reddit_username,reddit_password}")
+                reddit = praw.Reddit(
+                    client_id=reddit_client_id,
+                    client_secret=reddit_client_secret,
+                    user_agent=reddit_user_agent,
+                    username=reddit_username,
+                    password=reddit_password
+                )
+
+                # Verify authentication
+                try:
+                    logging.info("Verifying Reddit authentication...")
+                    reddit.user.me()
+                    logging.info("Reddit authentication successful")
+                except Exception as auth_error:
+                    logging.error(f"Reddit authentication verification failed: {str(auth_error)}")
+                    raise
+
+                logging.info(f"Fetching submission with ID: {post_id}")
+                submission = reddit.submission(id=post_id)
+                
+                if not submission:
+                    logging.error("Submission not found")
+                    raise prawcore.exceptions.NotFound("Submission not found")
+                
+                if submission.title != comment_input.post_title:
+                    logging.error(f"Title mismatch. Expected: {comment_input.post_title}, Got: {submission.title}")
+                    raise ValueError("Reddit post title mismatch")
+                
+                logging.info("Posting comment to submission...")
+                return submission.reply(comment_input.comment_text)
+                
+            except prawcore.exceptions.OAuthException as oauth_error:
+                logging.error(f"Reddit OAuth error: {str(oauth_error)}")
+                raise
+            except Exception as e:
+                logging.error(f"Error in post_to_reddit: {str(e)}")
+                raise
         try:
             loop = asyncio.get_event_loop()
+            logging.info("Attempting to post comment to Reddit...")
             comment = await loop.run_in_executor(None, post_to_reddit)
+            logging.info("Successfully posted comment to Reddit")
             
             # Save the comment to our database
-            reddit_comment = RedditComment(
-                brand_id=comment_input.brand_id,
-                post_id=post_id,
-                post_url=comment_input.post_url,
-                comment_text=comment_input.comment_text,
-                comment_url=f"https://reddit.com{comment.permalink}"
-            )
-            db.add(reddit_comment)
-            db.commit()
+            try:
+                logging.info("Saving comment to database...")
+                reddit_comment = RedditComment(
+                    brand_id=comment_input.brand_id,
+                    post_id=post_id,
+                    post_url=comment_input.post_url,
+                    comment_text=comment_input.comment_text,
+                    comment_url=f"https://reddit.com{comment.permalink}"
+                )
+                db.add(reddit_comment)
+                db.commit()
+                logging.info("Successfully saved comment to database")
+            except Exception as db_error:
+                logging.error(f"Database error while saving comment: {str(db_error)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to save comment to database: {str(db_error)}"
+                )
 
             return PostCommentResponse(
                 comment=comment_input.comment_text,
@@ -945,27 +1005,31 @@ async def post_reddit_comment(
             )
 
         except prawcore.exceptions.Forbidden as e:
+            logging.error(f"Reddit authentication error: {str(e)}")
             raise HTTPException(
                 status_code=403,
                 detail=f"Reddit authentication failed or insufficient permissions: {str(e)}"
             )
         except prawcore.exceptions.NotFound as e:
+            logging.error(f"Reddit post not found error: {str(e)}")
             raise HTTPException(
                 status_code=404,
                 detail=f"Reddit post not found: {str(e)}"
             )
         except prawcore.exceptions.ServerError as e:
-            # This is a server error, so we'll let it be retried
+            logging.error(f"Reddit server error: {str(e)}")
             raise HTTPException(
                 status_code=502,
                 detail=f"Reddit server error: {str(e)}"
             )
         except prawcore.exceptions.TooLarge as e:
+            logging.error(f"Comment too long error: {str(e)}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Comment is too long for Reddit: {str(e)}"
             )
         except Exception as e:
+            logging.error(f"Unexpected error while posting comment: {str(e)}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to post comment: {str(e)}"
@@ -974,6 +1038,7 @@ async def post_reddit_comment(
     except HTTPException:
         raise
     except Exception as e:
+        logging.error(f"Unexpected error in post_reddit_comment: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail="An unexpected error occurred"

@@ -233,12 +233,21 @@ class RedditCommentCRUD:
 
     @staticmethod
     def get_user_comment_count_last_24h(db: Session, user_email: str) -> int:
-        """Get the number of comments made by a user in the last 24 hours"""
+        """Get the number of successful comments (with comment URLs) made by a user in the last 24 hours"""
         yesterday = datetime.utcnow() - timedelta(days=1)
-        return (
+        # Print all comments for debugging
+        comments = (
             db.query(RedditComment)
             .join(Brand)
             .filter(Brand.user_email == user_email)
             .filter(RedditComment.created_at >= yesterday)
-            .count()
+            .filter(RedditComment.comment_url.isnot(None))  # Only count comments with URLs
+            .filter(RedditComment.comment_url != '')  # Ensure URL is not empty
+            .all()
         )
+        
+        # Print comments for debugging
+        for comment in comments:
+            print(f"Comment ID: {comment.id}, URL: {comment.comment_url}, Created At: {comment.created_at}")
+            
+        return len(comments)
