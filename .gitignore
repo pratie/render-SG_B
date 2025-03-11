@@ -16,7 +16,11 @@ reddit_analysis.db
 reddit_analysis_prod_backup.db
 reddit_analysis_feb16.db
 reddit_analysis.db
+reddit_analysis_mar12.db
 reddit_analysis_mar4.db
+reddit_analysis_mar12.db
+reddit_analysis_mar6.db
+reddit_analysis_mar12.db
 #any other database files
 reddit_analysis.db
 
@@ -26,7 +30,7 @@ tablest.py
 streamlit_new.py
 tablest.py
 main_backup.py
-
+test.py
 # User data files
 users_local.txt
 users_prod.txt

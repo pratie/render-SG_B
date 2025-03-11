@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 import json
+import psycopg2
 import os
 import anthropic
 import logging
@@ -461,11 +462,11 @@ async def analyze_reddit_content(
 ):
     """
     Analyze Reddit posts based on approved keywords and subreddits.
+    Uses both API calls and database queries to provide comprehensive results.
     Requires authentication.
     """
     try:
-        
-        print("\n analysis_input>>>>:\n",analysis_input)
+        print("\n analysis_input>>>>:\n", analysis_input)
         # Verify brand ownership and get latest data
         brand = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
         if not brand:
@@ -487,6 +488,12 @@ async def analyze_reddit_content(
         except json.JSONDecodeError:
             raise HTTPException(status_code=500, detail="Invalid keywords or subreddits format in database")
 
+        # Get results from database first (do this before clearing existing mentions)
+        logging.info("Querying database for existing Reddit posts...")
+        db_matching_posts = await get_database_results(analysis_input)
+        processed_urls = {post["url"] for post in db_matching_posts}
+        logging.info(f"Found {len(db_matching_posts)} posts from database")
+
         # Clear existing mentions for this brand before adding new ones
         try:
             db.query(RedditMention).filter(RedditMention.brand_id == brand.id).delete()
@@ -506,7 +513,7 @@ async def analyze_reddit_content(
                 requestor_kwargs={"session": session}
             )
 
-            matching_posts = []
+            api_matching_posts = []
             for subreddit_name in analysis_input.subreddits:
                 try:
                     # Clean up subreddit name by removing 'r/' prefix if present
@@ -530,19 +537,22 @@ async def analyze_reddit_content(
                     # Get posts from the subreddit based on time period
                     try:
                         # Default to month if time_period is not specified
-                        #time_period = analysis_input.time_period or "year"
                         time_period = "year"
-                        limit=700
+                        limit = 1000
                         posts = subreddit.top(time_period, limit=limit)
-                        print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",limit)
-                        print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n",time_period)
-                        #print("posts>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n\n",len(posts))
+                        print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", limit)
+                        print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", time_period)
                     except Exception as e:
                         logging.error(f"Error fetching posts from {clean_subreddit_name}: {str(e)}")
                         continue
                     
                     # Check each post for keyword matches
                     async for post in posts:
+                        # Skip if we already have this post from database
+                        post_url = f"https://reddit.com{post.permalink}"
+                        if post_url in processed_urls:
+                            continue
+                            
                         post_text = f"{post.title} {post.selftext}".lower()
                         matching_keywords = [
                             keyword for keyword in analysis_input.keywords 
@@ -550,32 +560,33 @@ async def analyze_reddit_content(
                         ]
                         
                         if matching_keywords:
-                            # Generate AI suggested comment and relevance score
-                            #test_comment, relevance_score = await generate_comment(post.title, post.selftext, brand.id, db)
-                            relevance_score= generate_relevance_score(post.title, post.selftext, brand.id, db)
-                            print("\n relavence score:\n",relevance_score)
+                            # Generate relevance score
+                            relevance_score = generate_relevance_score(post.title, post.selftext, brand.id, db)
+                            print("\n relavence score:\n", relevance_score)
                             suggested_comment = "This feature will be live soon! Stay tuned!😊"
                             
                             post_data = {
                                 "title": post.title,
                                 "content": post.selftext[:10000],  # Limit content length
-                                "url": f"https://reddit.com{post.permalink}",
+                                "url": post_url,
                                 "subreddit": clean_subreddit_name,
                                 "created_utc": post.created_utc,
                                 "score": post.score,
                                 "num_comments": post.num_comments,
                                 "relevance_score": relevance_score,
                                 "suggested_comment": suggested_comment,
-                                "matched_keywords": matching_keywords
+                                "matched_keywords": matching_keywords,
+                                "source": "api"  # Mark as coming from Reddit API
                             }
-                            matching_posts.append(post_data)
+                            api_matching_posts.append(post_data)
+                            processed_urls.add(post_url)  # Mark as processed
 
                             # Store the mention in the database
                             mention = RedditMention(
                                 brand_id=brand.id,
                                 title=post.title,
                                 content=post.selftext[:10000],  # Limit content length
-                                url=f"https://reddit.com{post.permalink}",
+                                url=post_url,
                                 subreddit=clean_subreddit_name,
                                 keyword=matching_keywords[0],  # Primary matching keyword
                                 matching_keywords_list=matching_keywords,  # All matching keywords
@@ -599,9 +610,36 @@ async def analyze_reddit_content(
 
             # Close the Reddit client
             await reddit.close()
+            
+            # Also save database results to RedditMention model
+            for post in db_matching_posts:
+                try:
+                    mention = RedditMention(
+                        brand_id=brand.id,
+                        title=post["title"],
+                        content=post["content"],
+                        url=post["url"],
+                        subreddit=post["subreddit"],
+                        keyword=post["matched_keywords"][0] if post["matched_keywords"] else "",
+                        matching_keywords_list=post["matched_keywords"],
+                        score=post["score"],
+                        num_comments=post["num_comments"],
+                        relevance_score=post["relevance_score"],
+                        suggested_comment=post["suggested_comment"],
+                        created_utc=int(post['created_utc'].timestamp()),
+                        #source="database"  # Add source to distinguish in the database
+                    )
+                    RedditMentionCRUD.create_mention(db, mention)
+                except Exception as e:
+                    logging.error(f"Error saving database mention: {str(e)}")
+                    continue
+
+            # Combine results from both sources
+            all_matching_posts = db_matching_posts + api_matching_posts
+            logging.info(f"Total posts found: {len(all_matching_posts)} ({len(db_matching_posts)} from DB, {len(api_matching_posts)} from API)")
 
             # Sort posts by relevance score
-            matching_posts.sort(key=lambda x: x["relevance_score"], reverse=True)
+            all_matching_posts.sort(key=lambda x: x["relevance_score"], reverse=True)
 
             # Update brand's last_analyzed timestamp
             brand.last_analyzed = datetime.utcnow()
@@ -609,13 +647,190 @@ async def analyze_reddit_content(
 
             return AnalysisResponse(
                 status="success",
-                posts=matching_posts,
-                matching_posts=matching_posts
+                posts=all_matching_posts,
+                matching_posts=all_matching_posts,
+                statistics={
+                    "total_posts": len(all_matching_posts),
+                    "api_posts": len(api_matching_posts),
+                    "database_posts": len(db_matching_posts)
+                }
             )
 
     except Exception as e:
         logging.error(f"Error analyzing Reddit content: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+# Database connection function
+def connect_to_db():
+    """Connect to the PostgreSQL database with Reddit data."""
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("PG_HOST"),
+            port=os.getenv("PG_PORT"),
+            dbname=os.getenv("PG_DBNAME"),
+            user=os.getenv("PG_USER"),
+            password=os.getenv("PG_PASSWORD")
+        )
+        return conn
+    except Exception as e:
+        logging.error(f"Error connecting to Reddit database: {e}")
+        return None
+
+# Updated keyword search function 
+def search_keywords(keywords, subreddit=None, limit=20, offset=0, table='submissions'):
+    """Search for posts containing any of the specified keywords."""
+    conn = connect_to_db()
+    if not conn:
+        return []
+        
+    try:
+        with conn.cursor() as cur:
+            # Check if the table exists
+            cur.execute(
+                f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{table}')"
+            )
+            if not cur.fetchone()[0]:
+                logging.error(f"Table '{table}' does not exist")
+                return []
+            
+            # Determine which fields to search based on the table
+            if table == 'submissions':
+                search_fields = ['title', 'selftext']
+                display_fields = [
+                    'id', 'author', 'title', 'selftext', 'score', 
+                    'created_utc', 'subreddit', 'num_comments', 'permalink'
+                ]
+            else:  # comments
+                search_fields = ['body']
+                display_fields = [
+                    'id', 'author', 'body', 'score', 'created_utc', 'subreddit', 'link_id'
+                ]
+            
+            # Handle keywords list properly
+            if isinstance(keywords, str):
+                keyword_list = [k.strip() for k in keywords.split(',')]
+            elif isinstance(keywords, list):
+                keyword_list = keywords
+            else:
+                keyword_list = list(keywords)
+            
+            # Build the WHERE clause to match any of the keywords
+            keyword_conditions = []
+            params = []
+            for keyword in keyword_list:
+                field_conditions = []
+                for field in search_fields:
+                    field_conditions.append(f"{field} ILIKE %s")
+                    params.append(f"%{keyword}%")
+                # Each keyword can match in any field
+                keyword_conditions.append(f"({' OR '.join(field_conditions)})")
+            
+            # Join all keyword conditions with OR to capture any match
+            where_clause = ' OR '.join(keyword_conditions)
+            
+            # Add subreddit filter if specified
+            if subreddit:
+                where_clause = f"({where_clause}) AND subreddit = %s"
+                params.append(subreddit)
+            
+            sql_query = f"""
+                SELECT {', '.join(display_fields)}
+                FROM {table}
+                WHERE {where_clause}
+                ORDER BY score DESC
+                LIMIT %s OFFSET %s
+            """
+            params.extend([limit, offset])
+            
+            logging.info(f"Executing SQL: {sql_query} with params: {params}")
+            cur.execute(sql_query, params)
+            results = cur.fetchall()
+            logging.info(f"Found {len(results)} results from database")
+            
+            # Convert results to a list of dictionaries
+            posts = []
+            for result in results:
+                post = {}
+                for i, field in enumerate(display_fields):
+                    post[field] = result[i]
+                posts.append(post)
+            
+            return posts
+    except Exception as e:
+        logging.error(f"Error searching keywords: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+# Updated function to get database results for the endpoint
+async def get_database_results(analysis_input):
+    """
+    Get matching posts from the PostgreSQL database.
+    Returns a list of posts matching any of the keywords in the specified subreddits.
+    """
+    db_matching_posts = []
+    processed_urls = set()
+    
+    try:
+        # Iterate over each subreddit
+        for subreddit_name in analysis_input.subreddits:
+            # Clean subreddit name
+            clean_subreddit_name = subreddit_name.replace('r/', '')
+            try:
+                # Use the updated search_keywords function to query using all keywords at once
+                db_posts = search_keywords(
+                    keywords=analysis_input.keywords,
+                    subreddit=clean_subreddit_name,
+                    limit=100,  # Reasonable limit per subreddit search
+                    table='submissions'
+                )
+                
+                # Process the database results
+                for post in db_posts:
+                    # Create the URL (if available)
+                    post_url = f"https://reddit.com{post['permalink']}" if 'permalink' in post else ""
+                    
+                    # Skip if we've already processed this URL
+                    if post_url in processed_urls:
+                        continue
+                    
+                    # Check if the post matches any of our keywords
+                    post_text = (
+                        f"{post['title']} {post['selftext']}".lower() 
+                        if 'selftext' in post 
+                        else post['title'].lower()
+                    )
+                    matching_keywords = [
+                        kw for kw in analysis_input.keywords 
+                        if kw.lower() in post_text
+                    ]
+                    
+                    if matching_keywords:
+                        # Create the post data structure
+                        post_data = {
+                            "title": post.get('title', ''),
+                            "content": post.get('selftext', '')[:10000],  # Limit content length
+                            "url": post_url,
+                            "subreddit": post.get('subreddit', clean_subreddit_name),
+                            "created_utc": post.get('created_utc', 0),
+                            "score": post.get('score', 0),
+                            "num_comments": post.get('num_comments', 0),
+                            "relevance_score": 50,  # Default medium relevance
+                            "suggested_comment": "This feature will be live soon! Stay tuned!😊",
+                            "matched_keywords": matching_keywords,
+                            "source": "database"
+                        }
+                        
+                        db_matching_posts.append(post_data)
+                        processed_urls.add(post_url)
+            except Exception as e:
+                logging.error(f"Error searching database for subreddit '{clean_subreddit_name}': {str(e)}")
+    
+    except Exception as e:
+        logging.error(f"Error in get_database_results: {str(e)}")
+    
+    logging.info(f"Found {len(db_matching_posts)} total matching posts from database")
+    return db_matching_posts
 
 @app.put(
     "/projects/{brand_id}", 
