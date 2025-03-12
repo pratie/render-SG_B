@@ -561,7 +561,8 @@ async def analyze_reddit_content(
                         
                         if matching_keywords:
                             # Generate relevance score
-                            relevance_score = generate_relevance_score(post.title, post.selftext, brand.id, db)
+                            #relevance_score = generate_relevance_score(post.title, post.selftext, brand.id, db)
+                            relevance_score=50
                             print("\n relavence score:\n", relevance_score)
                             suggested_comment = "This feature will be live soon! Stay tuned!😊"
                             
