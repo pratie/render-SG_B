@@ -23,10 +23,11 @@ reddit_analysis_mar6.db
 reddit_analysis_mar12.db
 #any other database files
 reddit_analysis.db
-
+reddit_analysis_mar13
 # Python files
 check_columns.py
 tablest.py
+reddit_db_analysis.py
 streamlit_new.py
 tablest.py
 main_backup.py

@@ -491,6 +491,11 @@ async def analyze_reddit_content(
         # Get results from database first (do this before clearing existing mentions)
         logging.info("Querying database for existing Reddit posts...")
         db_matching_posts = await get_database_results(analysis_input)
+        # i = 1
+        # for post in db_matching_posts:
+            # print(f"\n Post {i} from database:\n", post["title"], post["created_utc"],post["url"])
+            # print("create date in readable format:", datetime.fromtimestamp(post["created_utc"]))
+            # i += 1
         processed_urls = {post["url"] for post in db_matching_posts}
         logging.info(f"Found {len(db_matching_posts)} posts from database")
 
@@ -540,8 +545,8 @@ async def analyze_reddit_content(
                         time_period = "year"
                         limit = 1000
                         posts = subreddit.top(time_period, limit=limit)
-                        print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", limit)
-                        print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", time_period)
+                        # print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", limit)
+                        # print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", time_period)
                     except Exception as e:
                         logging.error(f"Error fetching posts from {clean_subreddit_name}: {str(e)}")
                         continue
@@ -549,7 +554,7 @@ async def analyze_reddit_content(
                     # Check each post for keyword matches
                     async for post in posts:
                         # Skip if we already have this post from database
-                        post_url = f"https://reddit.com{post.permalink}"
+                        post_url = f"https://reddit.com{post.permalink}" if post.permalink.startswith('/') else f"https://reddit.com/{post.permalink}"
                         if post_url in processed_urls:
                             continue
                             
@@ -563,15 +568,16 @@ async def analyze_reddit_content(
                             # Generate relevance score
                             #relevance_score = generate_relevance_score(post.title, post.selftext, brand.id, db)
                             relevance_score=50
-                            print("\n relavence score:\n", relevance_score)
                             suggested_comment = "This feature will be live soon! Stay tuned!😊"
+                            # print("\n Post found in API:\n", post.title, post.created_utc, post_url)
+                            # print("create date in readble format:", datetime.fromtimestamp(post.created_utc))
                             
                             post_data = {
                                 "title": post.title,
                                 "content": post.selftext[:10000],  # Limit content length
                                 "url": post_url,
                                 "subreddit": clean_subreddit_name,
-                                "created_utc": post.created_utc,
+                                "created_utc": int(post.created_utc),
                                 "score": post.score,
                                 "num_comments": post.num_comments,
                                 "relevance_score": relevance_score,
@@ -615,6 +621,11 @@ async def analyze_reddit_content(
             # Also save database results to RedditMention model
             for post in db_matching_posts:
                 try:
+                    # Ensure created_utc is a timestamp
+                    created_utc = post['created_utc']
+                    if isinstance(created_utc, datetime):
+                        created_utc = int(created_utc.timestamp())
+                    
                     mention = RedditMention(
                         brand_id=brand.id,
                         title=post["title"],
@@ -627,8 +638,7 @@ async def analyze_reddit_content(
                         num_comments=post["num_comments"],
                         relevance_score=post["relevance_score"],
                         suggested_comment=post["suggested_comment"],
-                        created_utc=int(post['created_utc'].timestamp()),
-                        #source="database"  # Add source to distinguish in the database
+                        created_utc=created_utc,
                     )
                     RedditMentionCRUD.create_mention(db, mention)
                 except Exception as e:
@@ -639,8 +649,43 @@ async def analyze_reddit_content(
             all_matching_posts = db_matching_posts + api_matching_posts
             logging.info(f"Total posts found: {len(all_matching_posts)} ({len(db_matching_posts)} from DB, {len(api_matching_posts)} from API)")
 
-            # Sort posts by relevance score
-            all_matching_posts.sort(key=lambda x: x["relevance_score"], reverse=True)
+            # Ensure all timestamps are integers before sorting
+            # for post in all_matching_posts:
+            #     if isinstance(post["created_utc"], datetime):
+            #         post["created_utc"] = int(post["created_utc"].timestamp())
+            #     elif isinstance(post["created_utc"], float):
+            #         post["created_utc"] = int(post["created_utc"])
+
+            # # Sort posts by creation time
+            # all_matching_posts.sort(key=lambda x: x["created_utc"], reverse=True)
+            # #print("\n all_matching_posts:\n", all_matching_posts)
+
+            # Convert created_utc to readable format and sort in descending order
+            for post in all_matching_posts:
+                post["created_utc_readable"] = datetime.fromtimestamp(post["created_utc"]).strftime('%Y-%m-%d %H:%M:%S')
+            all_matching_posts.sort(key=lambda x: x["created_utc_readable"], reverse=True)
+            i=1
+            for post in all_matching_posts:
+                print(i)
+                print(f"\n Post:\n", post["title"], post["created_utc_readable"])
+                print("\n")
+                print(post["url"])
+                print(f"Source: {post['source']}")
+                print("\n")
+                
+                i=i+1
+
+            # Return the sorted and formatted posts
+            return AnalysisResponse(
+                status="success",
+                posts=all_matching_posts,
+                matching_posts=all_matching_posts,
+                statistics={
+                    "total_posts": len(all_matching_posts),
+                    "api_posts": len(api_matching_posts),
+                    "database_posts": len(db_matching_posts)
+                }
+            )
 
             # Update brand's last_analyzed timestamp
             brand.last_analyzed = datetime.utcnow()
@@ -789,7 +834,8 @@ async def get_database_results(analysis_input):
                 # Process the database results
                 for post in db_posts:
                     # Create the URL (if available)
-                    post_url = f"https://reddit.com{post['permalink']}" if 'permalink' in post else ""
+                    #post_url = f"https://reddit.com{post['permalink']}" if 'permalink' in post else ""
+                    post_url = post.get('permalink', '')
                     
                     # Skip if we've already processed this URL
                     if post_url in processed_urls:
@@ -813,7 +859,7 @@ async def get_database_results(analysis_input):
                             "content": post.get('selftext', '')[:10000],  # Limit content length
                             "url": post_url,
                             "subreddit": post.get('subreddit', clean_subreddit_name),
-                            "created_utc": post.get('created_utc', 0),
+                            "created_utc": int(post.get('created_utc', 0).timestamp()) if isinstance(post.get('created_utc'), datetime) else post.get('created_utc', 0),
                             "score": post.get('score', 0),
                             "num_comments": post.get('num_comments', 0),
                             "relevance_score": 50,  # Default medium relevance
