@@ -554,10 +554,34 @@ async def analyze_reddit_content(
                     # Check each post for keyword matches
                     async for post in posts:
                         # Skip if we already have this post from database
-                        post_url = f"https://reddit.com{post.permalink}" if post.permalink.startswith('/') else f"https://reddit.com/{post.permalink}"
+                        post_url = ""
+                        if post.permalink:
+                            # Clean up the permalink to handle various formats
+                            permalink = post.permalink.strip()
+                            if permalink.startswith(('http://', 'https://')):
+                                # Already a full URL, use as is
+                                post_url = permalink
+                            elif permalink.startswith('//'):
+                                # Protocol-relative URL
+                                post_url = f"https:{permalink}"
+                            elif permalink.startswith('/'):
+                                # Relative URL starting with slash
+                                post_url = f"https://reddit.com{permalink}"
+                            else:
+                                # Relative URL without slash
+                                post_url = f"https://reddit.com/{permalink}"
+                        
+                        # Ensure URL is properly formatted
+                        if post_url and '//' in post_url:
+                            # Fix any double slashes in the path portion (after the domain)
+                            parts = post_url.split('//', 2)
+                            if len(parts) > 2:
+                                # There's a third // which is incorrect
+                                post_url = f"{parts[0]}//{parts[1]}/{parts[2].replace('//', '/')}"
+                        
                         if post_url in processed_urls:
                             continue
-                            
+                        
                         post_text = f"{post.title} {post.selftext}".lower()
                         matching_keywords = [
                             keyword for keyword in analysis_input.keywords 
@@ -834,8 +858,31 @@ async def get_database_results(analysis_input):
                 # Process the database results
                 for post in db_posts:
                     # Create the URL (if available)
-                    #post_url = f"https://reddit.com{post['permalink']}" if 'permalink' in post else ""
-                    post_url = post.get('permalink', '')
+                    permalink = post.get('permalink', '')
+                    post_url = ""
+                    if permalink:
+                        # Clean up the permalink to handle various formats
+                        permalink = permalink.strip()
+                        if permalink.startswith(('http://', 'https://')):
+                            # Already a full URL, use as is
+                            post_url = permalink
+                        elif permalink.startswith('//'):
+                            # Protocol-relative URL
+                            post_url = f"https:{permalink}"
+                        elif permalink.startswith('/'):
+                            # Relative URL starting with slash
+                            post_url = f"https://reddit.com{permalink}"
+                        else:
+                            # Relative URL without slash
+                            post_url = f"https://reddit.com/{permalink}"
+                    
+                    # Ensure URL is properly formatted
+                    if post_url and '//' in post_url:
+                        # Fix any double slashes in the path portion (after the domain)
+                        parts = post_url.split('//', 2)
+                        if len(parts) > 2:
+                            # There's a third // which is incorrect
+                            post_url = f"{parts[0]}//{parts[1]}/{parts[2].replace('//', '/')}"
                     
                     # Skip if we've already processed this URL
                     if post_url in processed_urls:
