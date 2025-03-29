@@ -1503,4 +1503,5 @@ async def explore_posts(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "10000"))  # Use PORT from env or default to 10000 for Render
+    uvicorn.run(app, host="0.0.0.0", port=port)
