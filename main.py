@@ -1411,7 +1411,7 @@ async def generate_comment_endpoint(
 async def explore_posts(
     query: str = Query(..., description="Search term for post titles"),
     subreddit: Optional[str] = Query(None, description="Filter by specific subreddit"),
-    limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
+    limit: int = Query(500, ge=1, le=500, description="Maximum number of results"),
     offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
     """
