@@ -1,7 +1,8 @@
 # main.py
-from fastapi import FastAPI, Depends, HTTPException, Body,Request
+from fastapi import FastAPI, Depends, HTTPException, Body, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
 from datetime import datetime, timezone
 import json
 import psycopg2
@@ -34,7 +35,7 @@ from models import (
     User, Brand, RedditMention, RedditComment, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
     KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse,
-    PostCommentInput, PostCommentResponse
+    PostCommentInput, PostCommentResponse, PostSearchResult
 )
 from auth.router import router as auth_router, get_current_user
 from routers.payment import router as payment_router
@@ -1399,6 +1400,106 @@ async def generate_comment_endpoint(
     except Exception as e:
         logging.error(f"Error in generate_comment_endpoint: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error generating comment")
+
+@app.get(
+    "/explore/posts/",
+    response_model=List[PostSearchResult],
+    tags=["reddit"],
+    summary="Explore Reddit Posts",
+    description="Search and explore posts in the database with optimized full-text search capabilities."
+)
+async def explore_posts(
+    query: str = Query(..., description="Search term for post titles"),
+    subreddit: Optional[str] = Query(None, description="Filter by specific subreddit"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
+):
+    """
+    Explores Reddit submissions using optimized search:
+    - Uses full-text search when available for multi-word queries
+    - Falls back to ILIKE for simple searches
+    - Can filter by subreddit
+    - Returns paginated results sorted by score
+    """
+    conn = connect_to_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    try:
+        with conn.cursor() as cur:
+            # Check if the table exists
+            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'submissions')")
+            if not cur.fetchone()[0]:
+                raise HTTPException(status_code=404, detail="Submissions table does not exist")
+            
+            # Check if we have full text search index
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_indexes 
+                    WHERE tablename = 'submissions'
+                    AND indexdef LIKE '%to_tsvector%title%'
+                )
+            """)
+            has_fts = cur.fetchone()[0]
+            
+            # Define display fields
+            display_fields = ['id', 'author', 'title', 'score', 'created_utc', 'subreddit', 'num_comments', 'permalink']
+            
+            # Build the WHERE clause
+            where_clauses = []
+            params = []
+            
+            # Use full text search if available, otherwise use ILIKE
+            if has_fts and ' ' in query.strip():
+                # Convert query to tsquery format (replace spaces with & for AND search)
+                ts_query = ' & '.join(query.split())
+                where_clauses.append("to_tsvector('english', title) @@ to_tsquery('english', %s)")
+                params.append(ts_query)
+            else:
+                # Fall back to ILIKE for simple searches
+                where_clauses.append("title ILIKE %s")
+                params.append(f"%{query}%")
+            
+            # Add subreddit filter if specified
+            if subreddit:
+                where_clauses.append("subreddit = %s")
+                params.append(subreddit)
+            
+            # Build the final query
+            sql_query = f"""
+                SELECT {', '.join(display_fields)}
+                FROM submissions
+                WHERE {' AND '.join(where_clauses)}
+                ORDER BY score DESC
+                LIMIT %s OFFSET %s
+            """
+            params.extend([limit, offset])
+            
+            cur.execute(sql_query, params)
+            results = cur.fetchall()
+            
+            # Convert to list of dicts and handle datetime conversion
+            posts = []
+            for result in results:
+                post = {}
+                for i, field in enumerate(display_fields):
+                    value = result[i]
+                    # Convert created_utc from Unix timestamp to datetime
+                    if field == 'created_utc' and isinstance(value, (int, float)):
+                        value = datetime.fromtimestamp(value)
+                    post[field] = value
+                posts.append(post)
+            
+            return posts
+
+    except Exception as e:
+        logging.error(f"Error in /explore/posts/ endpoint: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during post exploration"
+        )
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     import uvicorn

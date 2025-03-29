@@ -1,12 +1,16 @@
 # Environment files
 .env
-env/
-**/env/
-fresh_env/
+env 
 .env.local
 .env.development
 .env.test
 .env.production
+
+fresh_env/
+env/
+**/env/
+**/fresh_env/
+__pycache__
 
 # System files
 .DS_Store
@@ -24,14 +28,18 @@ reddit_analysis_mar12.db
 reddit_analysis_mar13.db
 reddit_analysis_m16.db
 reddit_analysis_m16.db
+reddit_analysis_mar26.db
+reddit_analysis.db
+reddit_analysis_backup.db
+
 #any other database files
 reddit_analysis.db
 reddit_analysis_mar13
 # Python files
 check_columns.py
 tablest.py
+explore_posts_subs
 reddit_db_analysis.py
-streamlit_new.py
 tablest.py
 main_backup.py
 test.py

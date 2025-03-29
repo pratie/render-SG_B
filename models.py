@@ -330,3 +330,16 @@ class PostCommentResponse(BaseModel):
     comment: str
     comment_url: str
     status: str = "success"
+
+class PostSearchResult(BaseModel):
+    id: str
+    author: Optional[str]
+    title: str
+    score: int
+    created_utc: datetime
+    subreddit: str
+    num_comments: int
+    permalink: str
+
+    class Config:
+        from_attributes = True
