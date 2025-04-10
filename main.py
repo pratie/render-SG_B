@@ -32,13 +32,15 @@ from slowapi.middleware import SlowAPIMiddleware
 from database import get_db, init_db
 from crud import UserCRUD, BrandCRUD, RedditMentionCRUD, RedditCommentCRUD
 from models import (
-    User, Brand, RedditMention, RedditComment, UserBase, UserCreate, UserResponse,
+    User, Brand, RedditMention, RedditComment, RedditToken, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
     KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse,
-    PostCommentInput, PostCommentResponse, PostSearchResult
+    PostCommentInput, PostCommentResponse, PostSearchResult, UserPreferences
 )
 from auth.router import router as auth_router, get_current_user
+from auth.reddit_oauth import router as reddit_oauth_router, get_reddit_token
 from routers.payment import router as payment_router
+from routers.preferences import router as preferences_router
 
 # Load environment variables
 load_dotenv()
@@ -103,7 +105,7 @@ async def startup_event():
 )
 async def get_user_brands(
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 80,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -116,7 +118,9 @@ async def get_user_brands(
         raise HTTPException(status_code=500, detail=str(e))
 # Include auth router
 app.include_router(auth_router)
+app.include_router(reddit_oauth_router)
 app.include_router(payment_router)
+app.include_router(preferences_router)
 
 # Initialize clients
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -247,8 +251,8 @@ async def generate_custom_comment(
     post_title: str,
     post_content: str,
     brand_id: int,
-    include_experience: bool,
-    db: Session
+    db: Session,
+    user_email: str = None
 ) -> str:
     """Generate custom AI response with natural brand incorporation"""
     logging.info(f"Starting comment generation for brand_id: {brand_id}")
@@ -266,78 +270,92 @@ async def generate_custom_comment(
         
         logging.info(f"Found brand: {brand_name}")
 
-        # Define system message and prompt
-        system_message = """
-You are an expert Reddit user who knows how to engage with people in reddit discussions naturally and authentically.
-Your responses should be helpful, conversational, and never end with generic questions like "let me know if you have questions" or "hope this helps".
+        # Get user preferences if available
+        user_prefs = None
+        if user_email:
+            user_prefs = db.query(UserPreferences).filter(
+                UserPreferences.user_email == user_email
+            ).first()
+
+        # Define system message based on user preferences
+#         system_message = """
+# You are an expert Reddit user who knows how to engage with people in reddit discussions naturally and authentically.
+# Your responses should be helpful, conversational, and never end with generic questions like "let me know if you have questions" or "hope this helps".
+# """
+
+        prompt = f"""
+You are creating a helpful, authentic Reddit comment that provides genuine value while subtly mentioning {brand_name} if appropriate at last. Your goal is to create a comment that gets upvoted because it's genuinely helpful.
+
+<context>
+Post Title: {post_title}
+Post Content: {post_content}
+Brand: {brand_name}
+What They Do: {brand_description}
+</context>
+
+<reddit_comment_rules>
+1. Sound like a real person, not a marketer:
+   - Write as if you're sharing your personal experience
+   - Use casual language with occasional imperfections
+   - Vary sentence length and structure
+   - Don't be overly enthusiastic or sales-y
+
+2. Make the comment valuable first:
+   - Address the specific problem/question in the post
+   - Provide genuinely helpful information or insights
+   - Only then mention the tool/product if relevant
+   - Share specific details about how it helped you
+
+3. Brand mention guidelines:
+   - Position brand mention in the last
+   - DO NOT Frame as personal discovery: "i found {brand_name}"
+   - Frame as the benefit of the brand and how it solved the problem
+   - Keep brand mentions brief and casual
+   - Only mention if it directly solves their problem
+
+4. Reddit specific authenticity:
+   - Write 1-2 short paragraphs max
+   - Avoid perfectionist formatting
+   - End with a confident statement, never a question
+   - No generic phrases like "hope this helps"
+
+5. Avoid these red flags:
+   - No marketing language or buzzwords
+   - No excessive punctuation
+   - No perfect lists or structured responses
+   - No obvious AI patterns
+   - No generic greetings
+   - NO hey, hi, hey there, hello there, hi there, etc.
+   - NO Yo, Hi, Hello, etc.
+   - Never use i've been, i've found, i've used. avoid this i've phrase
 """
 
-        prompt=f"""
-        You are an expert Reddit user who creates authentic, value-first comments that get upvoted. Follow these rules:
+        if user_prefs:
+            # Add tone customization based on user preferences
+            if user_prefs.tone == 'friendly':
+                prompt += "\n<tone>friendly</tone>"
+            elif user_prefs.tone == 'professional':
+                prompt += "\n<tone>professional</tone>"
+            elif user_prefs.tone == 'technical':
+                prompt += "\n<tone>technical</tone>"
+            
+            # Add any custom response style from user preferences
+            if user_prefs.response_style:
+                prompt += f"\n<custom_style>{user_prefs.response_style}</custom_style>"
 
-1. **Natural Style**:
-- Start with lowercase when natural ("yeah" not "Yeah")
-- Include mild imperfections (e.g., "its" vs "it's")
-- Keep sentences varied (short + medium length)
+        prompt += "\nGenerate ONLY the Reddit comment text between <response> tags.\nThe comment should be 1-2 sentences."
 
-2. **Brand Integration**:
-- Mention {brand_name} ONLY if 100% relevant
-- Use organic phrasing:
-  "I switched to {brand_name}" vs "Our tool"
-  "Been using {brand_name} lately" vs "Try {brand_name}"
-- Position brand in middle sentences
-
-3. **Upvote Triggers**:
-- Add unexpected value (quick tip/free resource)
-- Use Reddit lingo ("OP", "TIL", "PSA")
-- Show vulnerability ("I used to struggle with this")
-
-4. **Avoid**:
-- Generic endings ("Let me know!")
-- Perfect grammar
-- Marketing speak
-- Special separators (--- •)
-</system>
-
-<task>
-Generate ONLY a Reddit comment between <response> tags that:
-- Naturally mentions {brand_name} if relevant
-- Feels like a real user experience
-- Ends abruptly/naturally
-- Gets upvotes through authenticity
--comment should in 2 lines, it should not look like a single passage where users feels like its AI Generated. just main nice structure
-</task>
-
-<post_context>
-Title: {post_title}
-Content: {post_content}
-</post_context>
-
-<brand_context>
-Name: {brand_name}
-Description: {brand_description}
-</brand_context>
-
-<examples>
-Good:
-<response>this workflow used to take hours until i found {brand_name} - their keyword monitoring actually works. pro tip: search [specific syntax] in r/yourniche</response>
-
-Bad:
-<response>Try {brand_name}! It helps with keyword monitoring. Let me know if you need help!</response>
-</examples>
-</prompt>"""
-
-
-
-        # Make API call to generate response
-        logging.info("Sending request to Anthropic API")
+# API call
         response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=200,
-            temperature=0.95,  # Lower temperature for more consistent outputs
-            system=system_message,
-            messages=[{"role": "user", "content": prompt}]
-        )
+    model="claude-3-haiku-20240307",
+    max_tokens=254,
+    temperature=0.99,
+    messages=[{"role": "user", "content": prompt}]
+)
+
+        #print("SYSTEM:------------------------------------", system_message)
+        print("\n")
+        print("PROMPT:------------------------------------", prompt)
         
         logging.info("Received response from Anthropic API")
         
@@ -543,7 +561,7 @@ async def analyze_reddit_content(
                     # Get posts from the subreddit based on time period
                     try:
                         # Default to month if time_period is not specified
-                        time_period = "year"
+                        time_period = "month"
                         limit = 1000
                         posts = subreddit.top(time_period, limit=limit)
                         # print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", limit)
@@ -1183,7 +1201,7 @@ async def post_reddit_comment(
         comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user_email)
         logging.info(f"Current comment count for user {current_user_email}: {comment_count}/5")
         
-        if comment_count >= 5:  
+        if comment_count >= 20:  
             logging.warning(f"Rate limit exceeded for user {current_user_email}. Count: {comment_count}")
             raise HTTPException(
                 status_code=429,
@@ -1222,43 +1240,44 @@ async def post_reddit_comment(
                 status="already_exists"
             )
 
+        # Get Reddit token
+        token = await get_reddit_token(db, current_user_email)
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail="Reddit authentication required. Please connect your Reddit account first."
+            )
+
+        # Generate AI comment
+        comment = await generate_custom_comment(
+            post_title=comment_input.post_title,
+            post_content=comment_input.post_content,
+            brand_id=comment_input.brand_id,
+            db=db,
+            user_email=current_user_email
+        )
+
         # Run the Reddit operations in a thread pool
         def post_to_reddit():
             try:
                 logging.info("Initializing Reddit client...")
                 reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
                 reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
-                reddit_user_agent = os.getenv("REDDIT_USER_AGENT")
-                reddit_username = os.getenv("REDDIT_USERNAME")
-                reddit_password = os.getenv("REDDIT_PASSWORD")
+                reddit_user_agent = os.getenv("REDDIT_USER_AGENT", "python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)")
 
-                # Validate Reddit credentials
-                if not all([reddit_client_id, reddit_client_secret, reddit_username, reddit_password]):
-                    logging.error("Missing Reddit credentials")
-                    missing_creds = [
-                        cred for cred, val in {
-                            "REDDIT_CLIENT_ID": reddit_client_id,
-                            "REDDIT_CLIENT_SECRET": reddit_client_secret,
-                            "REDDIT_USERNAME": reddit_username,
-                            "REDDIT_PASSWORD": reddit_password
-                        }.items() if not val
-                    ]
-                    raise ValueError(f"Missing Reddit credentials: {', '.join(missing_creds)}")
-
-                logging.info(f"Attempting to authenticate with Reddit as user: {reddit_username,reddit_password}")
+                # Initialize Reddit client with OAuth token
                 reddit = praw.Reddit(
                     client_id=reddit_client_id,
                     client_secret=reddit_client_secret,
                     user_agent=reddit_user_agent,
-                    username=reddit_username,
-                    password=reddit_password
+                    refresh_token=token.refresh_token
                 )
 
                 # Verify authentication
                 try:
                     logging.info("Verifying Reddit authentication...")
-                    reddit.user.me()
-                    logging.info("Reddit authentication successful")
+                    reddit_user = reddit.user.me()
+                    logging.info(f"Reddit authentication successful as user: {reddit_user.name}")
                 except Exception as auth_error:
                     logging.error(f"Reddit authentication verification failed: {str(auth_error)}")
                     raise
@@ -1275,7 +1294,7 @@ async def post_reddit_comment(
                     raise ValueError("Reddit post title mismatch")
                 
                 logging.info("Posting comment to submission...")
-                return submission.reply(comment_input.comment_text)
+                return submission.reply(comment)
                 
             except prawcore.exceptions.OAuthException as oauth_error:
                 logging.error(f"Reddit OAuth error: {str(oauth_error)}")
@@ -1283,6 +1302,7 @@ async def post_reddit_comment(
             except Exception as e:
                 logging.error(f"Error in post_to_reddit: {str(e)}")
                 raise
+
         try:
             loop = asyncio.get_event_loop()
             logging.info("Attempting to post comment to Reddit...")
@@ -1355,11 +1375,11 @@ async def post_reddit_comment(
             detail="An unexpected error occurred"
         )
 
-@app.post("/generate-comment/", response_model=CommentResponse)
+@app.post("/generate-comment/", response_model=CommentResponse, tags=["reddit"])
 async def generate_comment_endpoint(
     comment_input: CommentInput,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: str = Depends(get_current_user)
 ):
     """
     Generate a custom comment for a Reddit post.
@@ -1371,35 +1391,14 @@ async def generate_comment_endpoint(
             post_title=comment_input.post_title,
             post_content=comment_input.post_content,
             brand_id=comment_input.brand_id,
-            include_experience=comment_input.include_experience,
-            db=db
+            db=db,
+            user_email=current_user  # current_user is already the email string
         )
         
-        if not comment:
-            logging.error("Empty comment generated")
-            raise HTTPException(status_code=500, detail="Failed to generate comment")
-        
-        # Store the generated comment in the database
-        new_comment = RedditComment(
-            brand_id=comment_input.brand_id,
-            post_id="",  # Will be filled when actually posted
-            post_url="",  # Will be filled when actually posted
-            comment_text=comment,
-            comment_url="",  # Will be filled when actually posted
-            created_at=datetime.utcnow()
-        )
-        db.add(new_comment)
-        db.commit()
-            
-        logging.info("Successfully generated and stored comment")
-        return CommentResponse(comment=comment)
-        
-    except ValueError as ve:
-        logging.error(f"ValueError in generate_comment_endpoint: {str(ve)}")
-        raise HTTPException(status_code=404, detail=str(ve))
+        return {"comment": comment}
     except Exception as e:
-        logging.error(f"Error in generate_comment_endpoint: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Error generating comment")
+        logging.error(f"Error in generate_comment_endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(
     "/explore/posts/",

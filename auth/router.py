@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -37,7 +37,7 @@ async def get_current_user(
 
 @router.post("/google-login", tags=["authentication"])
 async def google_login(
-    token: str,
+    token: str = Query(...),
     db: Session = Depends(get_db)
 ):
     """Login or register user with Google OAuth token"""
@@ -78,6 +78,14 @@ async def google_login(
             detail=str(e),
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+@router.get("/google-login", tags=["authentication"])
+async def google_login_get(
+    token: str = Query(...),
+    db: Session = Depends(get_db)
+):
+    """Login or register user with Google OAuth token (GET method)"""
+    return await google_login(token, db)
 
 @router.post("/test-login", tags=["authentication"])
 async def test_login(

@@ -1,10 +1,6 @@
 # Environment files
 .env
-env 
-.env.local
-.env.development
-.env.test
-.env.production
+.env.example    
 
 fresh_env/
 env/
@@ -30,7 +26,15 @@ reddit_analysis_m16.db
 reddit_analysis_m16.db
 reddit_analysis_mar26.db
 reddit_analysis.db
+reddit_analysis.db
+
 reddit_analysis_backup.db
+reddit_analysis_apr11.db
+reddit_analysis_apr10.db
+reddit_analysis_apr2.db
+reddit_analysis_apr7.db
+reddit_analysis_apr12.db
+reddit_analysis_apr.db
 
 #any other database files
 reddit_analysis.db
@@ -42,7 +46,13 @@ explore_posts_subs
 reddit_db_analysis.py
 tablest.py
 main_backup.py
+migrations.py
 test.py
+db_schema_info.py
+streamlit_app.py
+explore_posts_subs.py
+migrate_db.py
+refresh_db.py
 # User data files
 users_local.txt
 users_prod.txt

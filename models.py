@@ -2,7 +2,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, EmailStr, validator, Field
 from typing import List, Optional
 from datetime import datetime
 import json
@@ -140,6 +140,48 @@ class RedditComment(Base):
     class Config:
         from_attributes = True
 
+
+class RedditToken(Base):
+    __tablename__ = "reddit_tokens"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_email = Column(String, ForeignKey("users.email"), unique=True)
+    access_token = Column(String, nullable=False)
+    refresh_token = Column(String, nullable=False)
+    token_type = Column(String, nullable=False)
+    scope = Column(String, nullable=False)
+    expires_at = Column(Integer, nullable=False)  # Unix timestamp
+    reddit_username = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship
+    user = relationship("User", backref="reddit_token")
+
+# User Preferences Models
+class UserPreferences(Base):
+    __tablename__ = "user_preferences"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_email = Column(String, unique=True, index=True)
+    tone = Column(String, nullable=True)  # friendly, professional, technical
+    response_style = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class UserPreferencesInput(BaseModel):
+    tone: str = Field(description="Communication tone preference (friendly, professional, technical)")
+    response_style: Optional[str] = Field(None, description="Custom response style template")
+
+class UserPreferencesResponse(BaseModel):
+    tone: str
+    response_style: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
 # Pydantic Models for API
 class UserBase(BaseModel):
     email: EmailStr
@@ -168,8 +210,8 @@ class AnalysisInput(BaseModel):
     brand_id: int
     keywords: List[str]
     subreddits: List[str]
-    time_period: Optional[str] = "year"  # week, month, year
-    limit: Optional[int] = 500
+    time_period: Optional[str] = "month"  # week, month, year
+    limit: Optional[int] = 1000
 
 class KeywordResponse(BaseModel):
     keywords: List[str]
@@ -314,7 +356,6 @@ class CommentInput(BaseModel):
     post_title: str
     post_content: str
     brand_id: int
-    include_experience: bool = True
 
 class CommentResponse(BaseModel):
     comment: str
