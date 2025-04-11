@@ -1194,6 +1194,8 @@ async def post_reddit_comment(
     Rate limited to 5 comments per user per 24 hours.
     """
     logging.info(f"Starting comment posting request from user: {current_user_email}")
+
+    print('post comment input*50', comment_input)
     
     try:
         # Check rate limit
@@ -1249,13 +1251,15 @@ async def post_reddit_comment(
             )
 
         # Generate AI comment
-        comment = await generate_custom_comment(
-            post_title=comment_input.post_title,
-            post_content=comment_input.post_content,
-            brand_id=comment_input.brand_id,
-            db=db,
-            user_email=current_user_email
-        )
+        # comment = await generate_custom_comment(
+        #     post_title=comment_input.post_title,
+        #     post_content=comment_input.post_content,
+        #     brand_id=comment_input.brand_id,
+        #     db=db,
+        #     user_email=current_user_email
+        # )
+        # instead of generating comment we want to use the one that coming from the api call, we comment text option 
+        comment = comment_input.comment_text
 
         # Run the Reddit operations in a thread pool
         def post_to_reddit():
