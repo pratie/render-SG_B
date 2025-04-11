@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session
 import requests
 from pydantic import BaseModel
 import logging
+from datetime import datetime, timedelta
 
 from database import get_db
-from models import User, RedditToken
+from models import User, RedditToken, RedditOAuthState
 from auth.router import get_current_user
 
 # Create router
@@ -53,9 +54,6 @@ print(f"REDDIT_REDIRECT_URI loaded as: {REDDIT_REDIRECT_URI}")
 logging.info(f"REDDIT_REDIRECT_URI loaded as: {REDDIT_REDIRECT_URI}")
 
 REDDIT_SCOPES = ["identity", "read", "submit"]
-
-# State management - in production, use a more secure method like Redis
-state_store = {}
 
 def get_auth_headers() -> Dict[str, str]:
     """Get headers for Reddit API authentication"""
@@ -136,28 +134,90 @@ async def get_reddit_token(db: Session, user_email: str) -> Optional[RedditToken
     
     return token
 
+def save_oauth_state(db: Session, state: str, user_email: str) -> RedditOAuthState:
+    """Save OAuth state to database"""
+    try:
+        # Delete any existing expired states for this user
+        db.query(RedditOAuthState).filter(
+            RedditOAuthState.user_email == user_email,
+            RedditOAuthState.expires_at <= datetime.utcnow()
+        ).delete()
+        
+        oauth_state = RedditOAuthState(
+            state=state,
+            user_email=user_email,
+            expires_at=datetime.utcnow() + timedelta(minutes=10)
+        )
+        db.add(oauth_state)
+        db.commit()
+        logging.info(f"Saved OAuth state {state} for user {user_email}")
+        return oauth_state
+    except Exception as e:
+        logging.error(f"Error saving OAuth state: {str(e)}")
+        db.rollback()
+        raise
+
+def get_oauth_state(db: Session, state: str) -> Optional[RedditOAuthState]:
+    """Get OAuth state from database if valid"""
+    try:
+        logging.info(f"Looking for OAuth state: {state}")
+        oauth_state = db.query(RedditOAuthState).filter(
+            RedditOAuthState.state == state,
+            RedditOAuthState.expires_at > datetime.utcnow()
+        ).first()
+        
+        if oauth_state:
+            logging.info(f"Found valid OAuth state for user {oauth_state.user_email}")
+            # Clean up the used state
+            db.delete(oauth_state)
+            db.commit()
+            return oauth_state
+        else:
+            # Check if state exists but is expired
+            expired_state = db.query(RedditOAuthState).filter(
+                RedditOAuthState.state == state
+            ).first()
+            if expired_state:
+                logging.error(f"Found expired OAuth state for user {expired_state.user_email}")
+                db.delete(expired_state)
+                db.commit()
+            else:
+                logging.error("OAuth state not found in database")
+        return None
+    except Exception as e:
+        logging.error(f"Error getting OAuth state: {str(e)}")
+        return None
+
 @router.get("/login")
 async def reddit_login(
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Initiate Reddit OAuth flow"""
-    # Generate state parameter to prevent CSRF
-    state = secrets.token_urlsafe(32)
-    state_store[state] = current_user_email
-    
-    # Build authorization URL
-    params = {
-        "client_id": REDDIT_CLIENT_ID,
-        "response_type": "code",
-        "state": state,
-        "redirect_uri": REDDIT_REDIRECT_URI,
-        "duration": "permanent",
-        "scope": " ".join(REDDIT_SCOPES)
-    }
-    
-    auth_url = f"{REDDIT_OAUTH_URL}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
-    return {"auth_url": auth_url}
+    try:
+        # Generate state parameter to prevent CSRF
+        state = secrets.token_urlsafe(32)
+        logging.info(f"Generated new state {state} for user {current_user_email}")
+        
+        # Save state to database
+        save_oauth_state(db, state, current_user_email)
+        
+        # Build authorization URL
+        params = {
+            "client_id": REDDIT_CLIENT_ID,
+            "response_type": "code",
+            "state": state,
+            "redirect_uri": REDDIT_REDIRECT_URI,
+            "duration": "permanent",
+            "scope": " ".join(REDDIT_SCOPES)
+        }
+        
+        auth_url = f"{REDDIT_OAUTH_URL}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        logging.info(f"Generated Reddit auth URL with state {state}")
+        return {"auth_url": auth_url}
+    except Exception as e:
+        logging.error(f"Error in reddit_login: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/callback")
 async def reddit_callback(
@@ -184,7 +244,8 @@ async def reddit_callback(
         return Response(content=html_content, media_type="text/html")
     
     # Validate state to prevent CSRF
-    if not state or state not in state_store:
+    oauth_state = get_oauth_state(db, state) if state else None
+    if not oauth_state:
         logging.error("Invalid state parameter in Reddit OAuth callback")
         html_content = """
         <html>
@@ -201,7 +262,7 @@ async def reddit_callback(
     
     try:
         # Get user email from state
-        user_email = state_store.pop(state)
+        user_email = oauth_state.user_email
         
         # Exchange code for token
         token_data = {

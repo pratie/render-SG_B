@@ -4,7 +4,7 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from pydantic import BaseModel, EmailStr, validator, Field
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 from database import Base
@@ -23,6 +23,7 @@ class User(Base):
 
     # Relationships
     brands = relationship("Brand", back_populates="user", foreign_keys="Brand.user_email")
+    reddit_oauth_states = relationship("RedditOAuthState", back_populates="user", cascade="all, delete-orphan")
 
 class Brand(Base):
     __tablename__ = "brands"
@@ -157,6 +158,16 @@ class RedditToken(Base):
     
     # Relationship
     user = relationship("User", backref="reddit_token")
+
+class RedditOAuthState(Base):
+    __tablename__ = "reddit_oauth_states"
+
+    state = Column(String, primary_key=True)
+    user_email = Column(String, ForeignKey("users.email"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(minutes=10))
+
+    user = relationship("User", back_populates="reddit_oauth_states")
 
 # User Preferences Models
 class UserPreferences(Base):

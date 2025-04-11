@@ -43,6 +43,32 @@ def add_user(email, has_paid=False, stripe_payment_id=None):
         except Exception as e:
             return False, f"Error: {str(e)}"
 
+def update_user_payment(email, has_paid, stripe_payment_id=None):
+    """Update user payment status in the database."""
+    if not validate_email(email):
+        return False, "Invalid email format"
+        
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            # Check if user exists
+            cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+            if not cursor.fetchone():
+                return False, "User does not exist"
+            
+            # Update user payment status
+            cursor.execute("""
+                UPDATE users 
+                SET has_paid = ?, 
+                    stripe_payment_id = ?,
+                    payment_date = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+                WHERE email = ?
+            """, (has_paid, stripe_payment_id, has_paid, email))
+            conn.commit()
+            return True, "Payment status updated successfully"
+        except Exception as e:
+            return False, f"Error: {str(e)}"
+
 def get_user_preferences(email):
     """Get user preferences from database."""
     with get_db_connection() as conn:
@@ -127,6 +153,21 @@ def show_admin_dashboard():
             
             if submitted:
                 success, message = add_user(email, has_paid, stripe_id)
+                if success:
+                    st.success(message)
+                else:
+                    st.error(message)
+
+    # Update user payment form
+    with st.expander("Update User Payment"):
+        with st.form("update_payment_form"):
+            update_email = st.text_input("User Email")
+            update_has_paid = st.checkbox("Has Paid")
+            update_stripe_id = st.text_input("Stripe Payment ID (optional)")
+            update_submitted = st.form_submit_button("Update Payment Status")
+            
+            if update_submitted:
+                success, message = update_user_payment(update_email, update_has_paid, update_stripe_id)
                 if success:
                     st.success(message)
                 else:
