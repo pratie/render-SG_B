@@ -55,29 +55,37 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 if ENV == "production" or IS_RENDER:
     # Force absolute path in production
-    if not DATABASE_URL or not DATABASE_URL.startswith("sqlite:////"):
-        DB_PATH = Path("/var/data/reddit_analysis.db").resolve()
-        DATABASE_URL = "sqlite:////var/data/reddit_analysis.db"
-        logger.warning(f"Production environment requires absolute path. Forcing DATABASE_URL to: {DATABASE_URL}")
+    DB_PATH = Path("/var/data/reddit_analysis.db").resolve()
+    DATABASE_URL = f"sqlite:////{DB_PATH}"
+    logger.info(f"Production environment: Using database at {DB_PATH}")
 else:
     # Use relative path for local development
-    if not DATABASE_URL:
-        DB_PATH = Path("./reddit_analysis.db")
-        DATABASE_URL = "sqlite:///./reddit_analysis.db"
-        logger.info("Using local development database")
+    DB_PATH = Path("./reddit_analysis.db")
+    DATABASE_URL = "sqlite:///reddit_analysis.db"
+    logger.info("Development environment: Using local database")
 
-# Extract DB_PATH from DATABASE_URL
-if DATABASE_URL.startswith("sqlite:////"):
-    # Absolute path
-    db_file = DATABASE_URL.replace("sqlite:////", "/")
-    DB_PATH = Path(db_file).resolve()
-else:
-    # Relative path
-    db_file = DATABASE_URL.replace("sqlite:///", "")
-    DB_PATH = Path(db_file)
+logger.info("=== Database Configuration ===")
+logger.info(f"Environment: {ENV}")
+logger.info(f"Running on Render: {IS_RENDER}")
+logger.info(f"Database URL: {DATABASE_URL}")
+logger.info(f"Database Path (absolute): {DB_PATH.resolve()}")
 
-logger.info(f"Using database at path: {DB_PATH}")
-logger.info(f"Using DATABASE_URL: {DATABASE_URL}")
+# Ensure database directory exists
+try:
+    if not DB_PATH.parent.exists():
+        logger.info(f"Creating database directory: {DB_PATH.parent}")
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Set permissions in production
+        if ENV == "production" or IS_RENDER:
+            os.chmod(DB_PATH.parent, 0o777)
+            logger.info(f"Set permissions 777 on {DB_PATH.parent}")
+    
+    logger.info(f"Database directory exists: {DB_PATH.parent}")
+    check_directory_permissions(DB_PATH.parent)
+except Exception as e:
+    logger.error(f"Error with database directory: {e}")
+    logger.error("Will attempt to continue with existing permissions")
 
 # Check directory status before trying to create
 if ENV == "production" or IS_RENDER:
@@ -89,19 +97,6 @@ if ENV == "production" or IS_RENDER:
         logger.error("Directory /var/data does not exist!")
     else:
         logger.info("Directory /var/data exists")
-
-# Ensure database directory exists
-try:
-    if not DB_PATH.parent.exists():
-        logger.info(f"Directory {DB_PATH.parent} does not exist, attempting to create...")
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    
-    logger.info(f"Directory exists: {DB_PATH.parent}")
-    check_directory_permissions(DB_PATH.parent)
-    
-except Exception as e:
-    logger.error(f"Error with database directory: {e}")
-    logger.error("Will attempt to continue with existing permissions")
 
 # Log configuration
 logger.info("=== Database Configuration ===")
@@ -203,13 +198,37 @@ def init_db():
     try:
         logger.info("Starting database initialization...")
         logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info(f"Python executable: {sys.executable}")
+        logger.info(f"Python executable: {os.sys.executable}")
         logger.info(f"Process UID/GID: {os.getuid()}/{os.getgid()}")
         
-        # Wait for database to be accessible
-        wait_for_db()
-        logger.info("Database initialization completed successfully")
+        # Check database file (with retries)
+        max_attempts = 30
+        attempt = 1
+        while attempt <= max_attempts:
+            logger.info(f"Checking database file (attempt {attempt}/{max_attempts})...")
             
+            try:
+                # Create all tables
+                Base.metadata.create_all(bind=engine)
+                logger.info("SQLite PRAGMA settings applied successfully")
+                
+                # Test connection
+                with engine.connect() as conn:
+                    conn.execute("SELECT 1")
+                logger.info("Successfully connected to database")
+                logger.info("Database initialization completed successfully")
+                return
+            except Exception as e:
+                if attempt == max_attempts:
+                    logger.error(f"Final attempt failed: {e}")
+                    raise
+                logger.warning(f"Attempt {attempt} failed: {e}")
+                time.sleep(1)
+                attempt += 1
+                
     except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}")
+        logger.error(f"Database initialization failed: {e}")
         raise
+
+# Initialize database on startup
+init_db()
