@@ -1133,7 +1133,7 @@ async def update_brand_subreddits(
 async def get_brand_mentions(
     brand_id: int,
     skip: int = 0,
-    limit: int = 1000,
+    limit: int = 5000,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
