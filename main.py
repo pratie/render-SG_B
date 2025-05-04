@@ -35,12 +35,13 @@ from models import (
     User, Brand, RedditMention, RedditComment, RedditToken, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
     KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse,
-    PostCommentInput, PostCommentResponse, PostSearchResult, UserPreferences
+    PostCommentInput, PostCommentResponse, PostSearchResult, UserPreferences, AlertSetting
 )
 from auth.router import router as auth_router, get_current_user
 from auth.reddit_oauth import router as reddit_oauth_router, get_reddit_token
 from routers.payment import router as payment_router
 from routers.preferences import router as preferences_router
+from routers.alerts import router as alerts_router
 
 # Load environment variables
 load_dotenv()
@@ -121,6 +122,7 @@ app.include_router(auth_router)
 app.include_router(reddit_oauth_router)
 app.include_router(payment_router)
 app.include_router(preferences_router)
+app.include_router(alerts_router)
 
 # Initialize clients
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -394,60 +396,60 @@ What They Do: {brand_description}
     except Exception as e:
         logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
         return "Sorry, I'm having trouble generating a response right now."
-def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
-    """Generate relevance score between post and brand"""
-    try:
-        brand = db.query(Brand).filter(Brand.id == brand_id).first()
-        if not brand:
-            raise ValueError(f"Brand with id {brand_id} not found")
+# def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
+#     """Generate relevance score between post and brand"""
+#     try:
+#         brand = db.query(Brand).filter(Brand.id == brand_id).first()
+#         if not brand:
+#             raise ValueError(f"Brand with id {brand_id} not found")
 
-        system_message = """
-        You are an expert content analyzer specializing in determining relevance between social media posts and brand offerings. Your task is to analyze the similarity between a given post and a brand's offering, providing a relevance score from 20-100.
+#         system_message = """
+#         You are an expert content analyzer specializing in determining relevance between social media posts and brand offerings. Your task is to analyze the similarity between a given post and a brand's offering, providing a relevance score from 20-100.
 
-        Scoring Guide:
-        - 90-100: Exceptional match (direct need-solution fit)
-        - 70-89: Strong match (clear alignment with some minor gaps)
-        - 50-69: Moderate match (partial alignment)
-        - 35-49: Basic match (some relevant elements)
-        - 20-34: Minimal match (few overlapping elements)
+#         Scoring Guide:
+#         - 90-100: Exceptional match (direct need-solution fit)
+#         - 70-89: Strong match (clear alignment with some minor gaps)
+#         - 50-69: Moderate match (partial alignment)
+#         - 35-49: Basic match (some relevant elements)
+#         - 20-34: Minimal match (few overlapping elements)
 
-        Your output must be in this exact format:
-        Relevance Score: [20-100]
-        Explanation: [2-3 sentences explaining the score]
-        """
+#         Your output must be in this exact format:
+#         Relevance Score: [20-100]
+#         Explanation: [2-3 sentences explaining the score]
+#         """
 
-        prompt = f"""
-        Analyze the relevance between this post and brand:
+#         prompt = f"""
+#         Analyze the relevance between this post and brand:
 
-        Post Title: {post_title}
-        Post Content: {post_content}
-        Brand Name: {brand.name}
-        Brand Description: {brand.description}
-        """
+#         Post Title: {post_title}
+#         Post Content: {post_content}
+#         Brand Name: {brand.name}
+#         Brand Description: {brand.description}
+#         """
 
-        response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=200,
-            temperature=0.5,
-            system=system_message,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+#         response = anthropic_client.messages.create(
+#             model="claude-3-haiku-20240307",
+#             max_tokens=200,
+#             temperature=0.5,
+#             system=system_message,
+#             messages=[
+#                 {"role": "user", "content": prompt}
+#             ]
+#         )
 
-        response_text = response.content[0].text
+#         response_text = response.content[0].text
         
-        # Extract just the score
-        score_line = response_text.split('\n')[0]
-        score = int(''.join(filter(str.isdigit, score_line)))
+#         # Extract just the score
+#         score_line = response_text.split('\n')[0]
+#         score = int(''.join(filter(str.isdigit, score_line)))
         
-        # Ensure score is within 20-100 range
-        return max(20, min(100, score))
+#         # Ensure score is within 20-100 range
+#         return max(20, min(100, score))
 
-    except Exception as e:
-        logging.error(f"Error generating relevance score: {str(e)}")
-        # Return a default score in case of error
-        return 20
+#     except Exception as e:
+#         logging.error(f"Error generating relevance score: {str(e)}")
+#         # Return a default score in case of error
+#         return 20
 
 @app.post("/analyze/initial", response_model=KeywordResponse, tags=["analysis"])
 @get_analysis_rate_limit() 
@@ -510,14 +512,7 @@ async def analyze_reddit_content(
 
         # Get results from database first (do this before clearing existing mentions)
         logging.info("Querying database for existing Reddit posts...")
-        db_matching_posts = await get_database_results(analysis_input)
-        # i = 1
-        # for post in db_matching_posts:
-            # print(f"\n Post {i} from database:\n", post["title"], post["created_utc"],post["url"])
-            # print("create date in readable format:", datetime.fromtimestamp(post["created_utc"]))
-            # i += 1
-        processed_urls = {post["url"] for post in db_matching_posts}
-        logging.info(f"Found {len(db_matching_posts)} posts from database")
+        
 
         # Clear existing mentions for this brand before adding new ones
         try:
@@ -531,6 +526,10 @@ async def analyze_reddit_content(
 
         # Initialize Reddit client with async support
         ssl_context = ssl.create_default_context(cafile=certifi.where())
+        
+        # Initialize set to track processed URLs
+        processed_urls = set()
+        
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
             reddit = asyncpraw.Reddit(
                 **reddit_config,
@@ -662,76 +661,12 @@ async def analyze_reddit_content(
             # Close the Reddit client
             await reddit.close()
             
-            # Also save database results to RedditMention model
-            for post in db_matching_posts:
-                try:
-                    # Ensure created_utc is a timestamp
-                    created_utc = post['created_utc']
-                    if isinstance(created_utc, datetime):
-                        created_utc = int(created_utc.timestamp())
-                    
-                    mention = RedditMention(
-                        brand_id=brand.id,
-                        title=post["title"],
-                        content=post["content"],
-                        url=post["url"],
-                        subreddit=post["subreddit"],
-                        keyword=post["matched_keywords"][0] if post["matched_keywords"] else "",
-                        matching_keywords_list=post["matched_keywords"],
-                        score=post["score"],
-                        num_comments=post["num_comments"],
-                        relevance_score=post["relevance_score"],
-                        suggested_comment=post["suggested_comment"],
-                        created_utc=created_utc,
-                    )
-                    RedditMentionCRUD.create_mention(db, mention)
-                except Exception as e:
-                    logging.error(f"Error saving database mention: {str(e)}")
-                    continue
-
+            
             # Combine results from both sources
-            all_matching_posts = db_matching_posts + api_matching_posts
-            logging.info(f"Total posts found: {len(all_matching_posts)} ({len(db_matching_posts)} from DB, {len(api_matching_posts)} from API)")
+            all_matching_posts =  api_matching_posts
+            logging.info(f"Total posts found: {len(all_matching_posts)} ({len(api_matching_posts)} from API)")
 
-            # Ensure all timestamps are integers before sorting
-            # for post in all_matching_posts:
-            #     if isinstance(post["created_utc"], datetime):
-            #         post["created_utc"] = int(post["created_utc"].timestamp())
-            #     elif isinstance(post["created_utc"], float):
-            #         post["created_utc"] = int(post["created_utc"])
-
-            # # Sort posts by creation time
-            # all_matching_posts.sort(key=lambda x: x["created_utc"], reverse=True)
-            # #print("\n all_matching_posts:\n", all_matching_posts)
-
-            # Convert created_utc to readable format and sort in descending order
-            for post in all_matching_posts:
-                post["created_utc_readable"] = datetime.fromtimestamp(post["created_utc"]).strftime('%Y-%m-%d %H:%M:%S')
-            all_matching_posts.sort(key=lambda x: x["created_utc_readable"], reverse=True)
-            i=1
-            for post in all_matching_posts:
-                print(i)
-                print(f"\n Post:\n", post["title"], post["created_utc_readable"])
-                print("\n")
-                print(post["url"])
-                print(f"Source: {post['source']}")
-                print("\n")
-                
-                i=i+1
-
-            # Return the sorted and formatted posts
-            return AnalysisResponse(
-                status="success",
-                posts=all_matching_posts,
-                matching_posts=all_matching_posts,
-                statistics={
-                    "total_posts": len(all_matching_posts),
-                    "api_posts": len(api_matching_posts),
-                    "database_posts": len(db_matching_posts)
-                }
-            )
-
-            # Update brand's last_analyzed timestamp
+         
             brand.last_analyzed = datetime.utcnow()
             db.commit()
 
@@ -742,7 +677,6 @@ async def analyze_reddit_content(
                 statistics={
                     "total_posts": len(all_matching_posts),
                     "api_posts": len(api_matching_posts),
-                    "database_posts": len(db_matching_posts)
                 }
             )
 
@@ -851,100 +785,6 @@ def search_keywords(keywords, subreddit=None, limit=20, offset=0, table='submiss
     finally:
         conn.close()
 
-
-# Updated function to get database results for the endpoint
-async def get_database_results(analysis_input):
-    """
-    Get matching posts from the PostgreSQL database.
-    Returns a list of posts matching any of the keywords in the specified subreddits.
-    """
-    db_matching_posts = []
-    processed_urls = set()
-    
-    try:
-        # Iterate over each subreddit
-        for subreddit_name in analysis_input.subreddits:
-            # Clean subreddit name
-            clean_subreddit_name = subreddit_name.replace('r/', '')
-            try:
-                # Use the updated search_keywords function to query using all keywords at once
-                db_posts = search_keywords(
-                    keywords=analysis_input.keywords,
-                    subreddit=clean_subreddit_name,
-                    limit=100,  # Reasonable limit per subreddit search
-                    table='submissions'
-                )
-                
-                # Process the database results
-                for post in db_posts:
-                    # Create the URL (if available)
-                    permalink = post.get('permalink', '')
-                    post_url = ""
-                    if permalink:
-                        # Clean up the permalink to handle various formats
-                        permalink = permalink.strip()
-                        if permalink.startswith(('http://', 'https://')):
-                            # Already a full URL, use as is
-                            post_url = permalink
-                        elif permalink.startswith('//'):
-                            # Protocol-relative URL
-                            post_url = f"https:{permalink}"
-                        elif permalink.startswith('/'):
-                            # Relative URL starting with slash
-                            post_url = f"https://reddit.com{permalink}"
-                        else:
-                            # Relative URL without slash
-                            post_url = f"https://reddit.com/{permalink}"
-                    
-                    # Ensure URL is properly formatted
-                    if post_url and '//' in post_url:
-                        # Fix any double slashes in the path portion (after the domain)
-                        parts = post_url.split('//', 2)
-                        if len(parts) > 2:
-                            # There's a third // which is incorrect
-                            post_url = f"{parts[0]}//{parts[1]}/{parts[2].replace('//', '/')}"
-                    
-                    # Skip if we've already processed this URL
-                    if post_url in processed_urls:
-                        continue
-                    
-                    # Check if the post matches any of our keywords
-                    post_text = (
-                        f"{post['title']} {post['selftext']}".lower() 
-                        if 'selftext' in post 
-                        else post['title'].lower()
-                    )
-                    matching_keywords = [
-                        kw for kw in analysis_input.keywords 
-                        if kw.lower() in post_text
-                    ]
-                    
-                    if matching_keywords:
-                        # Create the post data structure
-                        post_data = {
-                            "title": post.get('title', ''),
-                            "content": post.get('selftext', '')[:10000],  # Limit content length
-                            "url": post_url,
-                            "subreddit": post.get('subreddit', clean_subreddit_name),
-                            "created_utc": int(post.get('created_utc', 0).timestamp()) if isinstance(post.get('created_utc'), datetime) else post.get('created_utc', 0),
-                            "score": post.get('score', 0),
-                            "num_comments": post.get('num_comments', 0),
-                            "relevance_score": 50,  # Default medium relevance
-                            "suggested_comment": "This feature will be live soon! Stay tuned!😊",
-                            "matched_keywords": matching_keywords,
-                            "source": "database"
-                        }
-                        
-                        db_matching_posts.append(post_data)
-                        processed_urls.add(post_url)
-            except Exception as e:
-                logging.error(f"Error searching database for subreddit '{clean_subreddit_name}': {str(e)}")
-    
-    except Exception as e:
-        logging.error(f"Error in get_database_results: {str(e)}")
-    
-    logging.info(f"Found {len(db_matching_posts)} total matching posts from database")
-    return db_matching_posts
 
 @app.put(
     "/projects/{brand_id}", 

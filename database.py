@@ -194,41 +194,40 @@ def get_db():
         db.close()
 
 def init_db():
-    """Initialize the database and create all tables."""
-    try:
-        logger.info("Starting database initialization...")
-        logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info(f"Python executable: {os.sys.executable}")
-        logger.info(f"Process UID/GID: {os.getuid()}/{os.getgid()}")
+    # Create tables if they don't exist
+    Base.metadata.create_all(bind=engine)
+    
+    # Check if we're using SQLite
+    if 'sqlite' in DATABASE_URL.lower():
+        # Add PRAGMA for foreign keys in SQLite
+        def enable_foreign_keys(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
         
-        # Check database file (with retries)
-        max_attempts = 30
-        attempt = 1
-        while attempt <= max_attempts:
-            logger.info(f"Checking database file (attempt {attempt}/{max_attempts})...")
-            
-            try:
-                # Create all tables
-                Base.metadata.create_all(bind=engine)
-                logger.info("SQLite PRAGMA settings applied successfully")
-                
-                # Test connection
-                with engine.connect() as conn:
-                    conn.execute("SELECT 1")
-                logger.info("Successfully connected to database")
-                logger.info("Database initialization completed successfully")
-                return
-            except Exception as e:
-                if attempt == max_attempts:
-                    logger.error(f"Final attempt failed: {e}")
-                    raise
-                logger.warning(f"Attempt {attempt} failed: {e}")
-                time.sleep(1)
-                attempt += 1
-                
+        event.listen(engine, 'connect', enable_foreign_keys)
+    
+    # Additional table creation for alerts if not already in models
+    try:
+        with engine.connect() as conn:
+            # Check if alert_settings table exists, if not create it
+            if not conn.dialect.has_table(conn, 'alert_settings'):
+                conn.execute("""
+                    CREATE TABLE alert_settings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_email TEXT UNIQUE,
+                        telegram_chat_id TEXT,
+                        enable_telegram_alerts BOOLEAN DEFAULT FALSE,
+                        enable_email_alerts BOOLEAN DEFAULT FALSE,
+                        alert_threshold_score INTEGER DEFAULT 100,
+                        alert_frequency TEXT DEFAULT 'daily',
+                        created_at TIMESTAMP,
+                        updated_at TIMESTAMP
+                    )
+                """)
+                logger.info("Created alert_settings table")
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
+        logger.error(f"Error initializing alert_settings table: {e}")
 
 # Initialize database on startup
 init_db()

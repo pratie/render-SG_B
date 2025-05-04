@@ -20,6 +20,7 @@ class User(Base):
     has_paid = Column(Boolean, default=False, nullable=False)
     payment_date = Column(DateTime, nullable=True)
     stripe_payment_id = Column(String, nullable=True)
+    dodo_payment_id = Column(String, nullable=True)
 
     # Relationships
     brands = relationship("Brand", back_populates="user", foreign_keys="Brand.user_email")
@@ -169,6 +170,20 @@ class RedditOAuthState(Base):
 
     user = relationship("User", back_populates="reddit_oauth_states")
 
+class AlertSetting(Base):
+    __tablename__ = "alert_settings"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_email = Column(String, unique=True, index=True)
+    telegram_chat_id = Column(String, nullable=True)
+    enable_telegram_alerts = Column(Boolean, default=False)
+    enable_email_alerts = Column(Boolean, default=False)
+    alert_threshold_score = Column(Integer, default=100)  # Minimum Reddit score to trigger alert
+    alert_frequency = Column(String, default="daily")  # daily, hourly, immediate
+    is_active = Column(Boolean, default=True)  # Whether alerts are active for this user
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 # User Preferences Models
 class UserPreferences(Base):
     __tablename__ = "user_preferences"
@@ -207,6 +222,28 @@ class UserResponse(UserBase):
     has_paid: bool = False
     payment_date: Optional[datetime] = None
     stripe_payment_id: Optional[str] = None
+    dodo_payment_id: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class AlertSettingInput(BaseModel):
+    telegram_chat_id: Optional[str] = Field('', description="Telegram chat ID for alerts")
+    enable_telegram_alerts: Optional[bool] = Field(False, description="Enable Telegram alerts")
+    enable_email_alerts: Optional[bool] = Field(False, description="Enable email alerts")
+    alert_threshold_score: Optional[int] = Field(100, description="Minimum Reddit post score to trigger alerts")
+    alert_frequency: Optional[str] = Field("daily", description="Frequency of alerts (daily, hourly, immediate)")
+    is_active: Optional[bool] = Field(True, description="Whether alerts are active for this user")
+
+class AlertSettingResponse(BaseModel):
+    telegram_chat_id: str
+    enable_telegram_alerts: bool
+    enable_email_alerts: bool
+    alert_threshold_score: int
+    alert_frequency: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True

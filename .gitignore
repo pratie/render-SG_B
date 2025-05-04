@@ -1,33 +1,30 @@
 # Environment files
-.env
-.env.example    
 
 fresh_env/
 env/
+.env
 **/env/
 **/fresh_env/
 __pycache__
+venv/
 
 # System files
 .DS_Store
+*.DS_Store
 
 # Database files
+*.db
+reddit_analysis_may4.db
+*.sqlite3
 reddit_analysis.db
 reddit_analysis_prod_backup.db
 reddit_analysis_feb16.db
-reddit_analysis.db
 reddit_analysis_mar12.db
 reddit_analysis_mar4.db
-reddit_analysis_mar12.db
 reddit_analysis_mar6.db
-reddit_analysis_mar12.db
 reddit_analysis_mar13.db
 reddit_analysis_m16.db
-reddit_analysis_m16.db
 reddit_analysis_mar26.db
-reddit_analysis.db
-reddit_analysis.db
-
 reddit_analysis_backup.db
 reddit_analysis_apr11.db
 reddit_analysis_apr10.db
@@ -36,25 +33,31 @@ reddit_analysis_apr7.db
 reddit_analysis_apr12.db
 reddit_analysis_apr.db
 
-#any other database files
-reddit_analysis.db
-reddit_analysis_mar13
 # Python files
-check_columns.py
+*.pyc
+*.pyo
+*.pyd
 tablest.py
 explore_posts_subs
 reddit_db_analysis.py
 tablest.py
 main_backup.py
-migrations.py
 test.py
-db_schema_info.py
+
 streamlit_app.py
 explore_posts_subs.py
-migrate_db.py
 refresh_db.py
+add_is_active_to_may4_db.py
+add_dodo_column.py
+add_is_active_column.py
+db_schema_info.py
+streamlit_new.py
+
 # User data files
 users_local.txt
 users_prod.txt
+DODO_PAYMENTS_DOCS.md
 
 # Node modules
+*.log
+.env
