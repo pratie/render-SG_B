@@ -62,8 +62,8 @@ async def create_checkout_session(
         
         # Initialize Dodo Payments client according to documentation
         client = DodoPayments(
-            bearer_token=dodo_api_key,
-            environment="test_mode"  # Set to test_mode as specified
+            api_key=dodo_api_key,
+            environment="test_mode" if os.getenv("ENV", "development").lower() == "development" else "live_mode"
         )
         
         # Log the API key format for debugging (masking most of it)
@@ -91,7 +91,7 @@ async def create_checkout_session(
                     "quantity": 1
                 }
             ],
-            return_url="http://localhost:3000/projects?payment=success"  # Updated to dashboard page
+            return_url=os.getenv("DODO_SUCCESS_URL", "http://localhost:3000/projects?payment=success")
         )
         
         # Store payment ID in database for reference
