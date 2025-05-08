@@ -1044,7 +1044,7 @@ async def post_reddit_comment(
         comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user_email)
         logging.info(f"Current comment count for user {current_user_email}: {comment_count}/5")
         
-        if comment_count >= 20:  
+        if comment_count >= 10:  
             logging.warning(f"Rate limit exceeded for user {current_user_email}. Count: {comment_count}")
             raise HTTPException(
                 status_code=429,

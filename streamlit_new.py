@@ -7,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # Initialize connection string and page config
-DB_PATH = 'reddit_analysis_may4.db'
+DB_PATH = 'reddit_analysis_may9.db'
 st.set_page_config(layout="wide", page_title="Brand Mentions Analytics")
 
 def validate_email(email):
