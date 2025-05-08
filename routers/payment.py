@@ -62,7 +62,7 @@ async def create_checkout_session(
         
         # Initialize Dodo Payments client according to documentation
         client = DodoPayments(
-            api_key=dodo_api_key,
+            bearer_token=dodo_api_key,
             environment="test_mode" if os.getenv("ENV", "development").lower() == "development" else "live_mode"
         )
         
