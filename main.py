@@ -1022,7 +1022,7 @@ class RedditCommentError(Exception):
         self.detail = detail
         super().__init__(detail)
 
-@app.post("/post-reddit-comment/", response_model=PostCommentResponse, tags=["reddit"])
+@app.post("/api/reddit/comment/", response_model=PostCommentResponse, tags=["reddit"])
 async def post_reddit_comment(
     comment_input: PostCommentInput,
     request: Request,

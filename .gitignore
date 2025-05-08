@@ -1,6 +1,7 @@
 # Environment files
 
 fresh_env/
+.env
 env/
 .env
 **/env/

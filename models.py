@@ -410,7 +410,7 @@ class CommentResponse(BaseModel):
 
 class PostCommentInput(BaseModel):
     post_title: str
-    post_content: str
+    post_content: Optional[str] = ""
     brand_id: int
     post_url: str
     comment_text: str

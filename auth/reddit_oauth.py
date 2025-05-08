@@ -137,55 +137,53 @@ async def get_reddit_token(db: Session, user_email: str) -> Optional[RedditToken
 def save_oauth_state(db: Session, state: str, user_email: str) -> RedditOAuthState:
     """Save OAuth state to database"""
     try:
-        # Delete any existing expired states for this user
+        # Delete any existing states for this user (expired or not)
         db.query(RedditOAuthState).filter(
-            RedditOAuthState.user_email == user_email,
-            RedditOAuthState.expires_at <= datetime.utcnow()
+            RedditOAuthState.user_email == user_email
         ).delete()
+        db.commit()
         
+        # Create new state with longer expiry
         oauth_state = RedditOAuthState(
             state=state,
             user_email=user_email,
-            expires_at=datetime.utcnow() + timedelta(minutes=10)
+            expires_at=datetime.utcnow() + timedelta(hours=1)  # Increased to 1 hour
         )
         db.add(oauth_state)
         db.commit()
-        logging.info(f"Saved OAuth state {state} for user {user_email}")
+        db.refresh(oauth_state)  # Ensure we have the latest data
+        
+        logging.info(f"Saved OAuth state {state} for user {user_email}, expires at {oauth_state.expires_at}")
         return oauth_state
     except Exception as e:
-        logging.error(f"Error saving OAuth state: {str(e)}")
+        logging.error(f"Error saving OAuth state: {str(e)}", exc_info=True)
         db.rollback()
-        raise
+        raise HTTPException(status_code=500, detail=f"Error saving OAuth state: {str(e)}")
 
 def get_oauth_state(db: Session, state: str) -> Optional[RedditOAuthState]:
     """Get OAuth state from database if valid"""
     try:
         logging.info(f"Looking for OAuth state: {state}")
         oauth_state = db.query(RedditOAuthState).filter(
-            RedditOAuthState.state == state,
-            RedditOAuthState.expires_at > datetime.utcnow()
+            RedditOAuthState.state == state
         ).first()
         
-        if oauth_state:
-            logging.info(f"Found valid OAuth state for user {oauth_state.user_email}")
-            # Clean up the used state
+        if not oauth_state:
+            logging.error("OAuth state not found in database")
+            return None
+            
+        if oauth_state.expires_at <= datetime.utcnow():
+            logging.error(f"OAuth state expired at {oauth_state.expires_at}")
             db.delete(oauth_state)
             db.commit()
-            return oauth_state
-        else:
-            # Check if state exists but is expired
-            expired_state = db.query(RedditOAuthState).filter(
-                RedditOAuthState.state == state
-            ).first()
-            if expired_state:
-                logging.error(f"Found expired OAuth state for user {expired_state.user_email}")
-                db.delete(expired_state)
-                db.commit()
-            else:
-                logging.error("OAuth state not found in database")
-        return None
+            return None
+            
+        # Delete the used state
+        db.delete(oauth_state)
+        db.commit()
+        return oauth_state
     except Exception as e:
-        logging.error(f"Error getting OAuth state: {str(e)}")
+        logging.error(f"Error getting OAuth state: {str(e)}", exc_info=True)
         return None
 
 @router.get("/login")
