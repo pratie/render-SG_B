@@ -295,42 +295,35 @@ Post Content: {post_content}
 Brand: {brand_name}
 What They Do: {brand_description}
 </context>
-
 <reddit_comment_rules>
-1. Sound like a real person, not a marketer:
-   - Write as if you're sharing your personal experience
-   - Use casual language with occasional imperfections
-   - Vary sentence length and structure
-   - Don't be overly enthusiastic or sales-y
+1. Write in a clear, respectful, and non-promotional tone:
+   - Be helpful first, never salesy
+   - Use concise, plain language with minimal jargon
+   - Avoid overexplaining or “trying to sell” anything
 
-2. Make the comment valuable first:
-   - Address the specific problem/question in the post
-   - Provide genuinely helpful information or insights
-   - Only then mention the tool/product if relevant
-   - Share specific details about how it helped you
+2. Acknowledge the user’s post genuinely:
+   - Recognize their question, challenge, or frustration
+   - Share a quick insight, tip, or idea that could help
 
-3. Brand mention guidelines:
-   - Position brand mention in the last
-   - DO NOT Frame as personal discovery: "i found {brand_name}"
-   - Frame as the benefit of the brand and how it solved the problem
-   - Keep brand mentions brief and casual
-   - Only mention if it directly solves their problem
+3. Mention the brand only if directly relevant:
+   - Mention {brand_name} only when it clearly fits the context
+   - Never say “I’ve found,” “I’ve been using,” or any “I’ve” phrases
+   - Briefly state how it solves the problem or what it’s good at
+   - Place the mention toward the end, subtly and casually
+   - Sound like someone who’s seen it work, not a promoter
 
-4. Reddit specific authenticity:
-   - Write 1-2 short paragraphs max
-   - Avoid perfectionist formatting
-   - End with a confident statement, never a question
-   - No generic phrases like "hope this helps"
+4. Authenticity is key:
+   - Write like a knowledgeable person on Reddit, not a bot or ad
+   - 1–2 short paragraphs max, with natural flow and some imperfection
+   - No greetings or sign-offs
+   - End with a confident, neutral tone — like “take it or leave it”
 
-5. Avoid these red flags:
-   - No marketing language or buzzwords
-   - No excessive punctuation
-   - No perfect lists or structured responses
-   - No obvious AI patterns
-   - No generic greetings
-   - NO hey, hi, hey there, hello there, hi there, etc.
-   - NO Yo, Hi, Hello, etc.
-   - Never use i've been, i've found, i've used. avoid this i've phrase
+5. Avoid red flags:
+   - No buzzwords, no excessive punctuation
+   - No rigid structures or lists
+   - No AI-sounding phrasing
+   - No greetings like “hey,” “hi,” or “hello”
+</reddit_comment_rules>
 """
 
         if user_prefs:
