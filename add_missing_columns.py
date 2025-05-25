@@ -8,7 +8,7 @@ import logging
 from contextlib import contextmanager
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger(__name__)
 
 @contextmanager
@@ -26,35 +26,35 @@ def add_missing_columns():
     
     with get_db_connection() as connection:
         try:
-            # Check if the columns already exist
-            logger.info("Checking if columns already exist...")
-            
-            # Check SQLite system table for column existence
-            result = connection.execute(text("PRAGMA table_info(brands)"))
-            columns = [row[1] for row in result.fetchall()]
-            
-            # Add last_analyzed column if it doesn't exist
-            if 'last_analyzed' not in columns:
-                logger.info("Adding 'last_analyzed' column to 'brands' table...")
-                connection.execute(
-                    text("ALTER TABLE brands ADD COLUMN last_analyzed DATETIME")
-                )
-                connection.commit()
-                logger.info("Successfully added 'last_analyzed' column.")
-            else:
-                logger.info("'last_analyzed' column already exists.")
-            
-            # Add subreddit_last_analyzed column if it doesn't exist
-            if 'subreddit_last_analyzed' not in columns:
-                logger.info("Adding 'subreddit_last_analyzed' column to 'brands' table...")
-                connection.execute(
-                    text("ALTER TABLE brands ADD COLUMN subreddit_last_analyzed TEXT DEFAULT '{}'")
-                )
-                connection.commit()
-                logger.info("Successfully added 'subreddit_last_analyzed' column.")
-            else:
-                logger.info("'subreddit_last_analyzed' column already exists.")
-            
+            # Use connection.begin() for a transaction block
+            with connection.begin(): # This will handle commit/rollback
+                logger.info("Checking if columns already exist...")
+                
+                result = connection.execute(text("PRAGMA table_info(brands)"))
+                columns = [row[1] for row in result.fetchall()]
+                
+                if 'last_analyzed' not in columns:
+                    logger.info("Adding 'last_analyzed' column to 'brands' table...")
+                    connection.execute(
+                        text("ALTER TABLE brands ADD COLUMN last_analyzed DATETIME")
+                    )
+                    logger.info("Successfully added 'last_analyzed' column.")
+                else:
+                    logger.info("'last_analyzed' column already exists.")
+                
+                # Re-fetch column info to ensure accuracy for subsequent checks in the same transaction
+                current_columns_result = connection.execute(text("PRAGMA table_info(brands)"))
+                current_columns = [row[1] for row in current_columns_result.fetchall()]
+
+                if 'subreddit_last_analyzed' not in current_columns:
+                    logger.info("Adding 'subreddit_last_analyzed' column to 'brands' table...")
+                    connection.execute(
+                        text("ALTER TABLE brands ADD COLUMN subreddit_last_analyzed TEXT DEFAULT '{}'")
+                    )
+                    logger.info("Successfully added 'subreddit_last_analyzed' column.")
+                else:
+                    logger.info("'subreddit_last_analyzed' column already exists (re-checked).")
+
             logger.info("Database schema updated successfully!")
             
         except Exception as e:

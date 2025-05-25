@@ -647,18 +647,27 @@ async def analyze_reddit_content(
                 logger.info("  - r/%s: Last analysis timestamp set to %s", sub_name, last_analyzed_dt)
             logger.info("======================\n")
 
-            all_processed_posts_for_response = new_mentions_data_for_response + updated_mentions_data_for_response
-            all_processed_posts_for_response.sort(key=lambda x: x["created_utc"], reverse=True)
+            # Fetch all mentions for the brand to return to the frontend.
+            # This ensures that even if no new mentions are found in this scan,
+            # the frontend can display all previously found mentions.
+            all_mentions_from_db = db.query(RedditMention).filter(RedditMention.brand_id == brand.id).order_by(RedditMention.created_utc.desc()).all()
             
+            comprehensive_mentions_list = []
+            for mention_orm_object in all_mentions_from_db:
+                # RedditMentionResponse.from_orm handles conversion from ORM to Pydantic model,
+                # including parsing JSON fields (like matching_keywords) and setting defaults.
+                mention_pydantic_object = RedditMentionResponse.from_orm(mention_orm_object)
+                comprehensive_mentions_list.append(mention_pydantic_object.dict()) # Using .dict() for Pydantic v1 compatibility
+
+            # new_mentions_count and updated_mentions_count (calculated earlier in the function)
+            # reflect the current scan's activity and are logged.
+            # The comprehensive_mentions_list now contains all relevant mentions for the brand.
+                
             return AnalysisResponse(
                 status="success",
-                posts=all_processed_posts_for_response,
-                matching_posts=all_processed_posts_for_response,
-                statistics={
-                    "total_posts": len(all_processed_posts_for_response),
-                    "new_posts": new_mentions_count,
-                    "updated_posts": updated_mentions_count,
-                }
+                posts=comprehensive_mentions_list, # Return the full list of mentions
+                matching_posts=comprehensive_mentions_list # Also use the full list here for consistency
+                # Removed 'statistics' field as it's not part of the AnalysisResponse model definition
             )
 
     except Exception as e:
