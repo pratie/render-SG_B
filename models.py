@@ -35,6 +35,8 @@ class Brand(Base):
     description = Column(String)
     keywords = Column(String, default="[]")  # JSON string
     subreddits = Column(String, default="[]")  # JSON string
+    last_analyzed = Column(DateTime, nullable=True)
+    subreddit_last_analyzed = Column(String, default="{}")  # JSON dict of subreddit -> timestamp
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -68,6 +70,19 @@ class Brand(Base):
     def subreddits_list(self, value: List[str]):
         """Set subreddits from a list"""
         self.subreddits = json.dumps(value)
+
+    @property
+    def subreddit_last_analyzed_dict(self) -> dict:
+        """Get subreddit last analyzed times as a dictionary"""
+        try:
+            return json.loads(self.subreddit_last_analyzed or "{}")
+        except json.JSONDecodeError:
+            return {}
+    
+    @subreddit_last_analyzed_dict.setter
+    def subreddit_last_analyzed_dict(self, value: dict):
+        """Store subreddit last analyzed times as JSON"""
+        self.subreddit_last_analyzed = json.dumps(value)
 
 class RedditMention(Base):
     __tablename__ = "reddit_mentions"

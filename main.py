@@ -1,4 +1,15 @@
 # main.py
+import logging
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 from fastapi import FastAPI, Depends, HTTPException, Body, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -8,7 +19,6 @@ import json
 import psycopg2
 import os
 import anthropic
-import logging
 from typing import List, Optional
 import asyncio
 import asyncpraw
@@ -477,51 +487,37 @@ async def analyze_reddit_content(
 ):
     """
     Analyze Reddit posts based on approved keywords and subreddits.
-    Uses both API calls and database queries to provide comprehensive results.
+    Uses incremental analysis: broader search for initial scan, .new() for updates.
     Requires authentication.
     """
     try:
-        print("\n analysis_input>>>>:\n", analysis_input)
         # Verify brand ownership and get latest data
         brand = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
         if not brand:
             raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
             
-        # Refresh brand data to ensure we have the latest keywords and subreddits
         brand = db.query(Brand).filter(Brand.id == analysis_input.brand_id).first()
         if not brand:
             raise HTTPException(status_code=404, detail="Brand not found")
             
-        # Parse the latest keywords and subreddits from the brand
         try:
             current_keywords = json.loads(brand.keywords)
             current_subreddits = json.loads(brand.subreddits)
-            
-            # Update the analysis input with latest data
             analysis_input.keywords = current_keywords
             analysis_input.subreddits = current_subreddits
         except json.JSONDecodeError:
             raise HTTPException(status_code=500, detail="Invalid keywords or subreddits format in database")
 
-        # Get results from database first (do this before clearing existing mentions)
-        logging.info("Querying database for existing Reddit posts...")
+        existing_mentions_db = {m.url: m for m in db.query(RedditMention).filter(RedditMention.brand_id == brand.id).all()}
+        subreddit_last_analyzed = brand.subreddit_last_analyzed_dict
         
-
-        # Clear existing mentions for this brand before adding new ones
-        try:
-            db.query(RedditMention).filter(RedditMention.brand_id == brand.id).delete()
-            db.commit()
-            logging.info(f"Cleared existing mentions for brand {brand.id}")
-        except Exception as e:
-            db.rollback()
-            logging.error(f"Error clearing existing mentions: {str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to clear existing mentions")
-
-        # Initialize Reddit client with async support
         ssl_context = ssl.create_default_context(cafile=certifi.where())
+        processed_urls_in_session = set()
         
-        # Initialize set to track processed URLs
-        processed_urls = set()
+        new_mentions_data_for_response = []
+        updated_mentions_data_for_response = []
+        new_mentions_count = 0
+        updated_mentions_count = 0
         
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
             reddit = asyncpraw.Reddit(
@@ -530,87 +526,59 @@ async def analyze_reddit_content(
                 requestor_kwargs={"session": session}
             )
 
-            api_matching_posts = []
             for subreddit_name in analysis_input.subreddits:
+                posts_iterator = None
+                is_initial_scan_for_subreddit = False
                 try:
-                    # Clean up subreddit name by removing 'r/' prefix if present
                     clean_subreddit_name = subreddit_name.replace('r/', '')
+                    last_analyzed_ts = subreddit_last_analyzed.get(clean_subreddit_name, 0)
+                    last_analyzed_str = datetime.utcfromtimestamp(last_analyzed_ts).strftime('%Y-%m-%d %H:%M:%S UTC') if last_analyzed_ts else 'Never'
                     
-                    # Try to access the subreddit
+                    logger.info("\n=== Analyzing r/%s ===", clean_subreddit_name)
+                    logger.info("Last analyzed: %s", last_analyzed_str)
+
                     try:
-                        subreddit = await reddit.subreddit(clean_subreddit_name)
-                        # Verify the subreddit exists by trying to access its properties
-                        await subreddit.load()
-                    except (asyncprawcore.exceptions.NotFound, asyncprawcore.exceptions.Redirect):
-                        logging.error(f"Subreddit {clean_subreddit_name} not found")
-                        continue
-                    except asyncprawcore.exceptions.Forbidden:
-                        logging.error(f"Access to subreddit {clean_subreddit_name} is forbidden")
-                        continue
+                        subreddit_obj = await reddit.subreddit(clean_subreddit_name)
                     except Exception as e:
-                        logging.error(f"Error accessing subreddit {clean_subreddit_name}: {str(e)}")
+                        logging.error(f"Error accessing subreddit r/{clean_subreddit_name}: {str(e)}")
                         continue
+
+                    if last_analyzed_ts == 0:  # Initial scan for this subreddit
+                        is_initial_scan_for_subreddit = True
+                        effective_limit =  1000 # Deeper scan by default for initial
+                        effective_time_period =  "month" # Default, user can override for deeper initial
+                        logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
+                        posts_iterator = subreddit_obj.top(time_filter=effective_time_period, limit=effective_limit)
+                    else: # Subsequent scan
+                        is_initial_scan_for_subreddit = False
+                        effective_limit = 300 # Standard limit for new posts
+                        logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
+                        posts_iterator = subreddit_obj.new(limit=effective_limit)
                     
-                    # Get posts from the subreddit based on time period
-                    try:
-                        # Default to month if time_period is not specified
-                        time_period = "month"
-                        limit = 1000
-                        posts = subreddit.top(time_period, limit=limit)
-                        # print("limit>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", limit)
-                        # print("time_period>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n", time_period)
-                    except Exception as e:
-                        logging.error(f"Error fetching posts from {clean_subreddit_name}: {str(e)}")
-                        continue
-                    
-                    # Check each post for keyword matches
-                    async for post in posts:
-                        # Skip if we already have this post from database
-                        post_url = ""
-                        if post.permalink:
-                            # Clean up the permalink to handle various formats
-                            permalink = post.permalink.strip()
-                            if permalink.startswith(('http://', 'https://')):
-                                # Already a full URL, use as is
-                                post_url = permalink
-                            elif permalink.startswith('//'):
-                                # Protocol-relative URL
-                                post_url = f"https:{permalink}"
-                            elif permalink.startswith('/'):
-                                # Relative URL starting with slash
-                                post_url = f"https://reddit.com{permalink}"
-                            else:
-                                # Relative URL without slash
-                                post_url = f"https://reddit.com/{permalink}"
-                        
-                        # Ensure URL is properly formatted
-                        if post_url and '//' in post_url:
-                            # Fix any double slashes in the path portion (after the domain)
-                            parts = post_url.split('//', 2)
-                            if len(parts) > 2:
-                                # There's a third // which is incorrect
-                                post_url = f"{parts[0]}//{parts[1]}/{parts[2].replace('//', '/')}"
-                        
-                        if post_url in processed_urls:
+                    processed_count_in_subreddit = 0
+                    async for post in posts_iterator:
+                        processed_count_in_subreddit += 1
+                        # For subsequent scans, stop if post is older than last analysis
+                        if not is_initial_scan_for_subreddit and post.created_utc <= last_analyzed_ts:
+                            logger.info(f"Stopping at post older than last analysis for r/{clean_subreddit_name}: '{post.title}'")
+                            break
+
+                        post_url = f"https://reddit.com{post.permalink}"
+                        if post_url in processed_urls_in_session:
                             continue
+                        processed_urls_in_session.add(post_url)
                         
-                        post_text = f"{post.title} {post.selftext}".lower()
-                        matching_keywords = [
-                            keyword for keyword in analysis_input.keywords 
-                            if keyword.lower() in post_text
-                        ]
+                        post_text = f"{post.title} {post.selftext if post.selftext else ''}".lower()
+                        matching_keywords = [kw for kw in analysis_input.keywords if kw.lower() in post_text]
                         
                         if matching_keywords:
-                            # Generate relevance score
-                            #relevance_score = generate_relevance_score(post.title, post.selftext, brand.id, db)
-                            relevance_score=50
-                            suggested_comment = "This feature will be live soon! Stay tuned!😊"
-                            # print("\n Post found in API:\n", post.title, post.created_utc, post_url)
-                            # print("create date in readble format:", datetime.fromtimestamp(post.created_utc))
+                            existing_mention_from_db = existing_mentions_db.get(post_url)
+                            relevance_score = 50  # Placeholder
+                            suggested_comment = "This feature will be live soon! Stay tuned!😊" # Placeholder
                             
-                            post_data = {
+                            post_data_for_response = {
                                 "title": post.title,
-                                "content": post.selftext[:10000],  # Limit content length
+                                "content": post.selftext[:10000] if post.selftext else "",
                                 "url": post_url,
                                 "subreddit": clean_subreddit_name,
                                 "created_utc": int(post.created_utc),
@@ -619,85 +587,83 @@ async def analyze_reddit_content(
                                 "relevance_score": relevance_score,
                                 "suggested_comment": suggested_comment,
                                 "matched_keywords": matching_keywords,
-                                "source": "api"  # Mark as coming from Reddit API
+                                "source": "api"
                             }
-                            api_matching_posts.append(post_data)
-                            processed_urls.add(post_url)  # Mark as processed
 
-                            # Store the mention in the database
-                            mention = RedditMention(
-                                brand_id=brand.id,
-                                title=post.title,
-                                content=post.selftext[:10000],  # Limit content length
-                                url=post_url,
-                                subreddit=clean_subreddit_name,
-                                keyword=matching_keywords[0],  # Primary matching keyword
-                                matching_keywords_list=matching_keywords,  # All matching keywords
-                                score=post.score,
-                                num_comments=post.num_comments,
-                                relevance_score=relevance_score,
-                                suggested_comment=suggested_comment,
-                                created_utc=int(post.created_utc)
-                            )
-                            try:
-                                logging.info(f"Saving mention for brand {brand.id}: {post.title}")
-                                RedditMentionCRUD.create_mention(db, mention)
-                                logging.info(f"Successfully saved mention for brand {brand.id}")
-                            except Exception as e:
-                                logging.error(f"Error saving mention: {str(e)}")
-                                continue
+                            if existing_mention_from_db:
+                                changed = False
+                                if existing_mention_from_db.score != post.score: existing_mention_from_db.score = post.score; changed = True
+                                if existing_mention_from_db.num_comments != post.num_comments: existing_mention_from_db.num_comments = post.num_comments; changed = True
+                                if json.dumps(matching_keywords, sort_keys=True) != existing_mention_from_db.matching_keywords:
+                                    existing_mention_from_db.matching_keywords = json.dumps(matching_keywords, sort_keys=True); changed = True
+
+                                if changed:
+                                    db.add(existing_mention_from_db)
+                                    updated_mentions_count += 1
+                                    post_data_for_response["relevance_score"] = existing_mention_from_db.relevance_score
+                                    post_data_for_response["suggested_comment"] = existing_mention_from_db.suggested_comment
+                                    updated_mentions_data_for_response.append(post_data_for_response)
+                                    logging.info(f"Updated existing mention: {post.title}")
+                            else:
+                                new_mention = RedditMention(
+                                    brand_id=brand.id, title=post.title,
+                                    content=post.selftext[:10000] if post.selftext else "",
+                                    url=post_url, subreddit=clean_subreddit_name,
+                                    keyword=matching_keywords[0],
+                                    matching_keywords=json.dumps(matching_keywords, sort_keys=True),
+                                    score=post.score, num_comments=post.num_comments,
+                                    relevance_score=relevance_score, suggested_comment=suggested_comment,
+                                    created_utc=int(post.created_utc)
+                                )
+                                db.add(new_mention)
+                                existing_mentions_db[post_url] = new_mention
+                                new_mentions_count += 1
+                                new_mentions_data_for_response.append(post_data_for_response)
+                                logging.info(f"Found new mention: {post.title}")
+                    
+                    if processed_count_in_subreddit > 0 or is_initial_scan_for_subreddit:
+                         # Update timestamp if we processed posts OR if it was an initial scan (even if no posts found, mark as scanned)
+                        subreddit_last_analyzed[clean_subreddit_name] = int(datetime.utcnow().timestamp())
+                    logger.info(f"Finished r/{clean_subreddit_name}, processed {processed_count_in_subreddit} posts from API call.")
 
                 except Exception as e:
                     logging.error(f"Error processing subreddit {subreddit_name}: {str(e)}")
                     continue
 
-            # Close the Reddit client
             await reddit.close()
             
-            
-            # Combine results from both sources
-            all_matching_posts =  api_matching_posts
-            logging.info(f"Total posts found: {len(all_matching_posts)} ({len(api_matching_posts)} from API)")
-
-         
-            brand.last_analyzed = datetime.utcnow()
+            current_time = datetime.utcnow()
+            brand.subreddit_last_analyzed = json.dumps(subreddit_last_analyzed)
+            brand.last_analyzed = current_time
             db.commit()
+            
+            logger.info("\n=== Analysis Summary ===")
+            logger.info("Analysis completed at: %s", current_time.strftime('%Y-%m-%d %H:%M:%S UTC'))
+            logger.info("New mentions found: %s", new_mentions_count)
+            logger.info("Existing mentions updated: %s", updated_mentions_count)
+            logger.info("Subreddit analysis timestamps updated as follows:")
+            for sub_name, ts in subreddit_last_analyzed.items():
+                last_analyzed_dt = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
+                logger.info("  - r/%s: Last analysis timestamp set to %s", sub_name, last_analyzed_dt)
+            logger.info("======================\n")
 
+            all_processed_posts_for_response = new_mentions_data_for_response + updated_mentions_data_for_response
+            all_processed_posts_for_response.sort(key=lambda x: x["created_utc"], reverse=True)
+            
             return AnalysisResponse(
                 status="success",
-                posts=all_matching_posts,
-                matching_posts=all_matching_posts,
+                posts=all_processed_posts_for_response,
+                matching_posts=all_processed_posts_for_response,
                 statistics={
-                    "total_posts": len(all_matching_posts),
-                    "api_posts": len(api_matching_posts),
+                    "total_posts": len(all_processed_posts_for_response),
+                    "new_posts": new_mentions_count,
+                    "updated_posts": updated_mentions_count,
                 }
             )
 
     except Exception as e:
         logging.error(f"Error analyzing Reddit content: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-# Database connection function
-def connect_to_db():
-    """Connect to the PostgreSQL database with Reddit data."""
-    try:
-        conn = psycopg2.connect(
-            host=os.getenv("PG_HOST"),
-            port=os.getenv("PG_PORT"),
-            dbname=os.getenv("PG_DBNAME"),
-            user=os.getenv("PG_USER"),
-            password=os.getenv("PG_PASSWORD")
-        )
-        return conn
-    except Exception as e:
-        logging.error(f"Error connecting to Reddit database: {e}")
-        return None
-
-# Updated keyword search function 
-def search_keywords(keywords, subreddit=None, limit=20, offset=0, table='submissions'):
-    """Search for posts containing any of the specified keywords."""
-    conn = connect_to_db()
-    if not conn:
-        return []
         
     try:
         with conn.cursor() as cur:
