@@ -6,7 +6,7 @@ import json
 from typing import List, Optional, Dict, Any
 import logging
 
-from models import User, Brand, RedditMention, RedditComment
+from models import User, Brand, RedditMention, RedditComment, AlertSetting # Added AlertSetting
 from fastapi import HTTPException
 
 class UserCRUD:
@@ -37,6 +37,48 @@ class UserCRUD:
             db.commit()
             db.refresh(db_user)
         return db_user
+
+# ... (end of UserCRUD class) ...
+
+class AlertSettingCRUD:
+    @staticmethod
+    def get_users_for_daily_digest(db: Session) -> List[User]:
+        """Get all users who have opted in for daily email digests (based on enable_email_alerts only)."""
+        return (
+            db.query(User)
+            .join(AlertSetting, User.email == AlertSetting.user_email)
+            .filter(AlertSetting.enable_email_alerts == True)
+            .all()
+        )
+
+    @staticmethod
+    def get_alert_setting(db: Session, user_email: str) -> Optional[AlertSetting]:
+        """Get alert settings for a specific user."""
+        return db.query(AlertSetting).filter(AlertSetting.user_email == user_email).first()
+
+    @staticmethod
+    def update_or_create_alert_setting(db: Session, user_email: str, settings_data: Dict[str, Any]) -> AlertSetting:
+        """Update or create alert settings for a user."""
+        setting = db.query(AlertSetting).filter(AlertSetting.user_email == user_email).first()
+        if not setting:
+            defaults = {
+                'telegram_chat_id': None,
+                'enable_telegram_alerts': False,
+                'enable_email_alerts': False, 
+                'alert_threshold_score': 100,
+                'alert_frequency': 'daily',
+                'is_active': True
+            }
+            final_settings = {**defaults, **settings_data}
+            setting = AlertSetting(user_email=user_email, **final_settings)
+            db.add(setting)
+        else:
+            for key, value in settings_data.items():
+                setattr(setting, key, value)
+            setting.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(setting)
+        return setting
 
 class BrandCRUD:
     @staticmethod
@@ -150,6 +192,23 @@ class RedditMentionCRUD:
         db.commit()
         db.refresh(mention)
         return mention
+
+    @staticmethod
+    def get_recent_mentions_for_user_brands(
+        db: Session, brand_ids: List[int], since_datetime: datetime
+    ) -> List[RedditMention]:
+        """Get mentions for specified brand_ids created after since_datetime."""
+        if not brand_ids:
+            return []
+        return (
+            db.query(RedditMention)
+            .filter(
+                RedditMention.brand_id.in_(brand_ids),
+                RedditMention.created_at >= since_datetime,
+            )
+            .order_by(desc(RedditMention.created_at))
+            .all()
+        )
 
     @staticmethod
     def get_brand_mentions(

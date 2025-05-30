@@ -33,6 +33,11 @@ import certifi
 import ssl
 import aiohttp
 import random
+from fastapi.staticfiles import StaticFiles
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from daily_digest_service import run_daily_digest_job
+import logging
 
 from fastapi.responses import JSONResponse
 from rate_limiter import limiter, rate_limit_exceeded_handler, get_analysis_rate_limit
@@ -95,17 +100,31 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000","https://vercel-f-tau.vercel.app","https://www.sneakyguy.com"],  # Add your frontend URL
+    allow_origins=["https://vercel-f-tau.vercel.app","https://www.sneakyguy.com","http://localhost:3000"],  # Production frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Initialize database on startup
+scheduler = AsyncIOScheduler(timezone="UTC") # Or your preferred timezone
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
-    logging.info("Database initialized")
+    logging.info("Database initialized") # Use your existing logger if preferred
+
+    # Schedule the daily digest job
+    # Example: Run daily at 08:00 UTC
+    scheduler.add_job(
+        run_daily_digest_job,
+        trigger=CronTrigger(hour=14, minute=0, timezone="UTC"),  # 10 AM EDT, 7 AM PDT
+        id="daily_digest_job", 
+        name="Daily Reddit Digest Email Job",
+        replace_existing=True
+    )
+    scheduler.start()
+    logging.info("APScheduler started. Daily digest job scheduled.")
 
 @app.get(
     "/projects/", 
@@ -477,6 +496,153 @@ async def get_initial_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+from typing import Tuple, List, Dict
+
+async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[List[Dict], int, int]:
+    """
+    Core logic to analyze Reddit posts for a given brand.
+    Fetches posts, matches keywords, saves/updates mentions, and updates brand timestamps.
+    Returns a list of all mention data for the brand, new mentions count, and updated mentions count.
+    """
+    brand = db.query(Brand).filter(Brand.id == brand_id).first()
+    if not brand:
+        logger.error(f"_perform_brand_reddit_analysis: Brand with ID {brand_id} not found.")
+        return [], 0, 0 
+            
+    try:
+        current_keywords = json.loads(brand.keywords)
+        current_subreddits = json.loads(brand.subreddits)
+    except json.JSONDecodeError:
+        logger.error(f"_perform_brand_reddit_analysis: Invalid keywords or subreddits format for brand {brand_id}.")
+        return [], 0, 0
+
+    existing_mentions_db = {m.url: m for m in db.query(RedditMention).filter(RedditMention.brand_id == brand.id).all()}
+    subreddit_last_analyzed = brand.subreddit_last_analyzed_dict
+    
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    processed_urls_in_session = set()
+    
+    new_mentions_count = 0
+    updated_mentions_count = 0
+    
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
+        reddit = asyncpraw.Reddit(
+            **reddit_config, 
+            requestor_class=asyncprawcore.Requestor,
+            requestor_kwargs={"session": session}
+        )
+
+        for subreddit_name in current_subreddits:
+            posts_iterator = None
+            is_initial_scan_for_subreddit = False
+            try:
+                clean_subreddit_name = subreddit_name.replace('r/', '')
+                last_analyzed_ts = subreddit_last_analyzed.get(clean_subreddit_name, 0)
+                last_analyzed_str = datetime.utcfromtimestamp(last_analyzed_ts).strftime('%Y-%m-%d %H:%M:%S UTC') if last_analyzed_ts else 'Never'
+                
+                logger.info("\n=== Analyzing r/%s for Brand ID %s ===", clean_subreddit_name, brand_id)
+                logger.info("Last analyzed: %s", last_analyzed_str)
+
+                try:
+                    subreddit_obj = await reddit.subreddit(clean_subreddit_name)
+                except Exception as e:
+                    logging.error(f"Error accessing subreddit r/{clean_subreddit_name} for Brand ID {brand_id}: {str(e)}")
+                    continue
+
+                if last_analyzed_ts == 0:
+                    is_initial_scan_for_subreddit = True
+                    effective_limit =  1000
+                    effective_time_period = "month"
+                    logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
+                    posts_iterator = subreddit_obj.top(time_filter=effective_time_period, limit=effective_limit)
+                else: 
+                    is_initial_scan_for_subreddit = False
+                    effective_limit = 300
+                    logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
+                    posts_iterator = subreddit_obj.new(limit=effective_limit)
+                
+                processed_count_in_subreddit = 0
+                async for post in posts_iterator:
+                    processed_count_in_subreddit += 1
+                    if not is_initial_scan_for_subreddit and post.created_utc <= last_analyzed_ts:
+                        logger.info(f"Stopping at post older than last analysis for r/{clean_subreddit_name}: '{post.title}'")
+                        break
+
+                    post_url = f"https://reddit.com{post.permalink}"
+                    if post_url in processed_urls_in_session:
+                        continue
+                    processed_urls_in_session.add(post_url)
+                    
+                    post_text = f"{post.title} {post.selftext if post.selftext else ''}".lower()
+                    matching_keywords = [kw for kw in current_keywords if kw.lower() in post_text]
+                    
+                    if matching_keywords:
+                        existing_mention_from_db = existing_mentions_db.get(post_url)
+                        relevance_score = 50
+                        suggested_comment = "This feature will be live soon! Stay tuned!😊"
+
+                        if existing_mention_from_db:
+                            changed = False
+                            if existing_mention_from_db.score != post.score: existing_mention_from_db.score = post.score; changed = True
+                            if existing_mention_from_db.num_comments != post.num_comments: existing_mention_from_db.num_comments = post.num_comments; changed = True
+                            current_matching_keywords_json = json.dumps(matching_keywords, sort_keys=True)
+                            if current_matching_keywords_json != existing_mention_from_db.matching_keywords:
+                                existing_mention_from_db.matching_keywords = current_matching_keywords_json; changed = True
+                            
+                            if changed:
+                                db.add(existing_mention_from_db)
+                                updated_mentions_count += 1
+                                logging.info(f"Updated existing mention for Brand ID {brand_id}: {post.title}")
+                        else:
+                            new_mention = RedditMention(
+                                brand_id=brand.id, title=post.title,
+                                content=post.selftext[:10000] if post.selftext else "",
+                                url=post_url, subreddit=clean_subreddit_name,
+                                keyword=matching_keywords[0],
+                                matching_keywords=json.dumps(matching_keywords, sort_keys=True),
+                                score=post.score, num_comments=post.num_comments,
+                                relevance_score=relevance_score, suggested_comment=suggested_comment,
+                                created_utc=int(post.created_utc)
+                            )
+                            db.add(new_mention)
+                            existing_mentions_db[post_url] = new_mention
+                            new_mentions_count += 1
+                            logging.info(f"Found new mention for Brand ID {brand_id}: {post.title}")
+                
+                if processed_count_in_subreddit > 0 or is_initial_scan_for_subreddit:
+                    subreddit_last_analyzed[clean_subreddit_name] = int(datetime.utcnow().timestamp())
+                logger.info(f"Finished r/{clean_subreddit_name} for Brand ID {brand_id}, processed {processed_count_in_subreddit} posts from API call.")
+
+            except Exception as e:
+                logging.error(f"Error processing subreddit {subreddit_name} for Brand ID {brand_id}: {str(e)}", exc_info=True)
+                continue
+
+        await reddit.close()
+        
+        current_time_utc = datetime.utcnow()
+        brand.subreddit_last_analyzed = json.dumps(subreddit_last_analyzed)
+        brand.last_analyzed = current_time_utc
+        db.commit()
+        
+        logger.info("\n=== Analysis Summary for Brand ID %s ===", brand_id)
+        logger.info("Analysis completed at: %s", current_time_utc.strftime('%Y-%m-%d %H:%M:%S UTC'))
+        logger.info("New mentions found: %s", new_mentions_count)
+        logger.info("Existing mentions updated: %s", updated_mentions_count)
+        logger.info("Subreddit analysis timestamps updated as follows:")
+        for sub_name, ts in subreddit_last_analyzed.items():
+            last_analyzed_dt = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
+            logger.info("  - r/%s: Last analysis timestamp set to %s", sub_name, last_analyzed_dt)
+        logger.info("======================\n")
+
+        all_mentions_from_db = db.query(RedditMention).filter(RedditMention.brand_id == brand.id).order_by(RedditMention.created_utc.desc()).all()
+        
+        comprehensive_mentions_list_for_response = []
+        for mention_orm_object in all_mentions_from_db:
+            mention_pydantic_object = RedditMentionResponse.from_orm(mention_orm_object)
+            comprehensive_mentions_list_for_response.append(mention_pydantic_object.dict())
+
+        return comprehensive_mentions_list_for_response, new_mentions_count, updated_mentions_count
+
 @app.post("/analyze/reddit", response_model=AnalysisResponse, tags=["analysis"])
 @get_analysis_rate_limit() 
 async def analyze_reddit_content(
@@ -489,190 +655,32 @@ async def analyze_reddit_content(
     Analyze Reddit posts based on approved keywords and subreddits.
     Uses incremental analysis: broader search for initial scan, .new() for updates.
     Requires authentication.
+    Triggers core analysis logic and returns results.
     """
     try:
-        # Verify brand ownership and get latest data
-        brand = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
-        if not brand:
+        brand_check = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
+        if not brand_check:
             raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
-            
-        brand = db.query(Brand).filter(Brand.id == analysis_input.brand_id).first()
-        if not brand:
-            raise HTTPException(status_code=404, detail="Brand not found")
-            
-        try:
-            current_keywords = json.loads(brand.keywords)
-            current_subreddits = json.loads(brand.subreddits)
-            analysis_input.keywords = current_keywords
-            analysis_input.subreddits = current_subreddits
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="Invalid keywords or subreddits format in database")
 
-        existing_mentions_db = {m.url: m for m in db.query(RedditMention).filter(RedditMention.brand_id == brand.id).all()}
-        subreddit_last_analyzed = brand.subreddit_last_analyzed_dict
+        comprehensive_mentions_list, new_mentions_found, updated_mentions_found = await _perform_brand_reddit_analysis(
+            brand_id=analysis_input.brand_id, 
+            db=db
+        )
         
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        processed_urls_in_session = set()
-        
-        new_mentions_data_for_response = []
-        updated_mentions_data_for_response = []
-        new_mentions_count = 0
-        updated_mentions_count = 0
-        
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
-            reddit = asyncpraw.Reddit(
-                **reddit_config,
-                requestor_class=asyncprawcore.Requestor,
-                requestor_kwargs={"session": session}
-            )
+        logger.info(f"Endpoint analyze_reddit_content for Brand ID {analysis_input.brand_id} completed. "
+                    f"New: {new_mentions_found}, Updated: {updated_mentions_found}.")
 
-            for subreddit_name in analysis_input.subreddits:
-                posts_iterator = None
-                is_initial_scan_for_subreddit = False
-                try:
-                    clean_subreddit_name = subreddit_name.replace('r/', '')
-                    last_analyzed_ts = subreddit_last_analyzed.get(clean_subreddit_name, 0)
-                    last_analyzed_str = datetime.utcfromtimestamp(last_analyzed_ts).strftime('%Y-%m-%d %H:%M:%S UTC') if last_analyzed_ts else 'Never'
-                    
-                    logger.info("\n=== Analyzing r/%s ===", clean_subreddit_name)
-                    logger.info("Last analyzed: %s", last_analyzed_str)
+        return AnalysisResponse(
+            status="success",
+            posts=comprehensive_mentions_list,
+            matching_posts=comprehensive_mentions_list
+        )
 
-                    try:
-                        subreddit_obj = await reddit.subreddit(clean_subreddit_name)
-                    except Exception as e:
-                        logging.error(f"Error accessing subreddit r/{clean_subreddit_name}: {str(e)}")
-                        continue
-
-                    if last_analyzed_ts == 0:  # Initial scan for this subreddit
-                        is_initial_scan_for_subreddit = True
-                        effective_limit =  1000 # Deeper scan by default for initial
-                        effective_time_period =  "month" # Default, user can override for deeper initial
-                        logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
-                        posts_iterator = subreddit_obj.top(time_filter=effective_time_period, limit=effective_limit)
-                    else: # Subsequent scan
-                        is_initial_scan_for_subreddit = False
-                        effective_limit = 300 # Standard limit for new posts
-                        logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
-                        posts_iterator = subreddit_obj.new(limit=effective_limit)
-                    
-                    processed_count_in_subreddit = 0
-                    async for post in posts_iterator:
-                        processed_count_in_subreddit += 1
-                        # For subsequent scans, stop if post is older than last analysis
-                        if not is_initial_scan_for_subreddit and post.created_utc <= last_analyzed_ts:
-                            logger.info(f"Stopping at post older than last analysis for r/{clean_subreddit_name}: '{post.title}'")
-                            break
-
-                        post_url = f"https://reddit.com{post.permalink}"
-                        if post_url in processed_urls_in_session:
-                            continue
-                        processed_urls_in_session.add(post_url)
-                        
-                        post_text = f"{post.title} {post.selftext if post.selftext else ''}".lower()
-                        matching_keywords = [kw for kw in analysis_input.keywords if kw.lower() in post_text]
-                        
-                        if matching_keywords:
-                            existing_mention_from_db = existing_mentions_db.get(post_url)
-                            relevance_score = 50  # Placeholder
-                            suggested_comment = "This feature will be live soon! Stay tuned!😊" # Placeholder
-                            
-                            post_data_for_response = {
-                                "title": post.title,
-                                "content": post.selftext[:10000] if post.selftext else "",
-                                "url": post_url,
-                                "subreddit": clean_subreddit_name,
-                                "created_utc": int(post.created_utc),
-                                "score": post.score,
-                                "num_comments": post.num_comments,
-                                "relevance_score": relevance_score,
-                                "suggested_comment": suggested_comment,
-                                "matched_keywords": matching_keywords,
-                                "source": "api"
-                            }
-
-                            if existing_mention_from_db:
-                                changed = False
-                                if existing_mention_from_db.score != post.score: existing_mention_from_db.score = post.score; changed = True
-                                if existing_mention_from_db.num_comments != post.num_comments: existing_mention_from_db.num_comments = post.num_comments; changed = True
-                                if json.dumps(matching_keywords, sort_keys=True) != existing_mention_from_db.matching_keywords:
-                                    existing_mention_from_db.matching_keywords = json.dumps(matching_keywords, sort_keys=True); changed = True
-
-                                if changed:
-                                    db.add(existing_mention_from_db)
-                                    updated_mentions_count += 1
-                                    post_data_for_response["relevance_score"] = existing_mention_from_db.relevance_score
-                                    post_data_for_response["suggested_comment"] = existing_mention_from_db.suggested_comment
-                                    updated_mentions_data_for_response.append(post_data_for_response)
-                                    logging.info(f"Updated existing mention: {post.title}")
-                            else:
-                                new_mention = RedditMention(
-                                    brand_id=brand.id, title=post.title,
-                                    content=post.selftext[:10000] if post.selftext else "",
-                                    url=post_url, subreddit=clean_subreddit_name,
-                                    keyword=matching_keywords[0],
-                                    matching_keywords=json.dumps(matching_keywords, sort_keys=True),
-                                    score=post.score, num_comments=post.num_comments,
-                                    relevance_score=relevance_score, suggested_comment=suggested_comment,
-                                    created_utc=int(post.created_utc)
-                                )
-                                db.add(new_mention)
-                                existing_mentions_db[post_url] = new_mention
-                                new_mentions_count += 1
-                                new_mentions_data_for_response.append(post_data_for_response)
-                                logging.info(f"Found new mention: {post.title}")
-                    
-                    if processed_count_in_subreddit > 0 or is_initial_scan_for_subreddit:
-                         # Update timestamp if we processed posts OR if it was an initial scan (even if no posts found, mark as scanned)
-                        subreddit_last_analyzed[clean_subreddit_name] = int(datetime.utcnow().timestamp())
-                    logger.info(f"Finished r/{clean_subreddit_name}, processed {processed_count_in_subreddit} posts from API call.")
-
-                except Exception as e:
-                    logging.error(f"Error processing subreddit {subreddit_name}: {str(e)}")
-                    continue
-
-            await reddit.close()
-            
-            current_time = datetime.utcnow()
-            brand.subreddit_last_analyzed = json.dumps(subreddit_last_analyzed)
-            brand.last_analyzed = current_time
-            db.commit()
-            
-            logger.info("\n=== Analysis Summary ===")
-            logger.info("Analysis completed at: %s", current_time.strftime('%Y-%m-%d %H:%M:%S UTC'))
-            logger.info("New mentions found: %s", new_mentions_count)
-            logger.info("Existing mentions updated: %s", updated_mentions_count)
-            logger.info("Subreddit analysis timestamps updated as follows:")
-            for sub_name, ts in subreddit_last_analyzed.items():
-                last_analyzed_dt = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
-                logger.info("  - r/%s: Last analysis timestamp set to %s", sub_name, last_analyzed_dt)
-            logger.info("======================\n")
-
-            # Fetch all mentions for the brand to return to the frontend.
-            # This ensures that even if no new mentions are found in this scan,
-            # the frontend can display all previously found mentions.
-            all_mentions_from_db = db.query(RedditMention).filter(RedditMention.brand_id == brand.id).order_by(RedditMention.created_utc.desc()).all()
-            
-            comprehensive_mentions_list = []
-            for mention_orm_object in all_mentions_from_db:
-                # RedditMentionResponse.from_orm handles conversion from ORM to Pydantic model,
-                # including parsing JSON fields (like matching_keywords) and setting defaults.
-                mention_pydantic_object = RedditMentionResponse.from_orm(mention_orm_object)
-                comprehensive_mentions_list.append(mention_pydantic_object.dict()) # Using .dict() for Pydantic v1 compatibility
-
-            # new_mentions_count and updated_mentions_count (calculated earlier in the function)
-            # reflect the current scan's activity and are logged.
-            # The comprehensive_mentions_list now contains all relevant mentions for the brand.
-                
-            return AnalysisResponse(
-                status="success",
-                posts=comprehensive_mentions_list, # Return the full list of mentions
-                matching_posts=comprehensive_mentions_list # Also use the full list here for consistency
-                # Removed 'statistics' field as it's not part of the AnalysisResponse model definition
-            )
-
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        logging.error(f"Error analyzing Reddit content: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in analyze_reddit_content endpoint for Brand ID {analysis_input.brand_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
         
     try:
         with conn.cursor() as cur:

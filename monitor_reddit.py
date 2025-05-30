@@ -179,10 +179,37 @@ async def stream_subreddit(reddit, subreddit_name: str, config_for_sub: list, db
                     else:
                         logger.warning(f"User {alert_setting.user_email} has no Telegram Chat ID configured for alerts.")
                         
-                    # --- TODO: Optionally save mention to database? ---
-                    # Consider if mentions found via streaming should also be saved.
-                    # If so, add logic here similar to analyze_reddit_content
-                    # Need to handle potential duplicates carefully.
+                    # --- Save mention to database ---
+                    post_url = f"https://reddit.com{submission.permalink}"
+                    existing_mention = db.query(RedditMention).filter(
+                        RedditMention.brand_id == brand_id,
+                        RedditMention.url == post_url
+                    ).first()
+
+                    if not existing_mention:
+                        try:
+                            new_mention = RedditMention(
+                                brand_id=brand_id,
+                                title=submission.title,
+                                content=submission.selftext[:10000] if submission.selftext else "",
+                                url=post_url,
+                                subreddit=subreddit_name,  # This is the cleaned subreddit name
+                                keyword=matched_keywords[0] if matched_keywords else None,
+                                matching_keywords=json.dumps(matched_keywords, sort_keys=True),
+                                score=submission.score,
+                                num_comments=submission.num_comments,
+                                created_utc=int(submission.created_utc),
+                                relevance_score=None,  # Monitor focuses on capture; analysis can enrich later
+                                suggested_comment=None # Monitor focuses on capture; analysis can enrich later
+                            )
+                            db.add(new_mention)
+                            db.commit()  # Commit each new mention
+                            logger.info(f"    -> Saved new mention to DB for Brand ID {brand_id}: {submission.title[:50]}...")
+                        except Exception as e:
+                            logger.error(f"    -> Error saving new mention to DB for Brand ID {brand_id}, URL {post_url}: {e}", exc_info=True)
+                            db.rollback()
+                    else:
+                        logger.info(f"    -> Mention already exists in DB for Brand ID {brand_id}, URL {post_url}. Monitor skipping save.")
 
     except asyncprawcore.exceptions.NotFound:
         logger.error(f"Subreddit r/{subreddit_name} not found or access denied. Stopping stream.")

@@ -7,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # Initialize connection string and page config
-DB_PATH = 'reddit_analysis_may19.db'
+DB_PATH = 'reddit_analysis.db'
 st.set_page_config(layout="wide", page_title="Brand Mentions Analytics")
 
 def validate_email(email):
@@ -87,6 +87,12 @@ def get_reddit_auth_status(email):
             FROM reddit_tokens 
             WHERE user_email = ?
         """, conn, params=(email,))
+        return df
+
+def get_alert_settings_data():
+    """Get all alert settings data from the database."""
+    with get_db_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM alert_settings", conn)
         return df
 
 def get_user_stats(email):
@@ -174,7 +180,7 @@ def show_admin_dashboard():
                     st.error(message)
 
     # Main content tabs
-    tabs = st.tabs(["Users", "Reddit Mentions", "Brands", "Reddit Comments", "User Preferences", "Reddit Auth Status"])
+    tabs = st.tabs(["Users", "Reddit Mentions", "Brands", "Reddit Comments", "User Preferences", "Reddit Auth Status", "Alert Settings"])
     
     with tabs[0]:
         st.subheader("Users")
@@ -300,6 +306,29 @@ def show_admin_dashboard():
                     st.write("Token Expires At:", datetime.fromtimestamp(expires_at) if expires_at else "N/A")
             else:
                 st.warning("No Reddit authentication found for this user")
+                
+    with tabs[6]:
+        st.subheader("Alert Settings")
+        alert_settings_df = get_alert_settings_data()
+        if not alert_settings_df.empty:
+            # Convert datetime columns
+            datetime_cols = ['created_at', 'updated_at']
+            for col in datetime_cols:
+                if col in alert_settings_df.columns:
+                    alert_settings_df[col] = pd.to_datetime(alert_settings_df[col], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Display metrics
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Alert Settings", len(alert_settings_df))
+            with col2:
+                telegram_enabled = len(alert_settings_df[alert_settings_df['enable_telegram_alerts'] == True])
+                st.metric("Telegram Alerts Enabled", telegram_enabled)
+            
+            # Display the full dataframe
+            st.dataframe(alert_settings_df, use_container_width=True)
+        else:
+            st.info("No alert settings found")
 
 def show_user_dashboard(email):
     """Display the user-specific dashboard with brand analytics"""

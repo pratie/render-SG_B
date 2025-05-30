@@ -3,6 +3,8 @@
 fresh_env/
 .env
 env/
+.env    
+.env
 .env
 **/env/
 **/fresh_env/
@@ -78,6 +80,11 @@ reddit_db_analysis.py
 tablest.py
 main_backup.py
 test.py
+streamlit_new.py
+update_paid_user_alerts.py
+test_resend.py
+monitor_reddit.py
+monitor_reddit.py
 
 streamlit_app.py
 explore_posts_subs.py
@@ -86,7 +93,7 @@ add_is_active_to_may4_db.py
 add_dodo_column.py
 add_is_active_column.py
 db_schema_info.py
-streamlit_new.py
+
 
 # User data files
 users_local.txt
@@ -97,4 +104,3 @@ DODO_PAYMENTS_DOCS.md
 *.log
 .env
 reddit_analysis.db
-streamlit_new.py
