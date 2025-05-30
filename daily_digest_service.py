@@ -245,6 +245,22 @@ async def send_digest_email_async(recipient_email: str, html_content: str, subje
         logger.error(f"Error sending digest email to {recipient_email}: {e}", exc_info=True)
         return False
 
+# List of emails that already received digests today - to be removed tomorrow
+SKIP_EMAILS = [
+    "s.karthik.2k9@gmail.com",
+    "sombirvats@gmail.com",
+    "zubin.ajmera@pspdfkit.com",
+    "nitinbansal85.v2.1@gmail.com",
+    "aliimran16520@gmail.com",
+    "eswarpoluri@gmail.com",
+    "leonsbox@gmail.com",
+    "prathapsaik17@gmail.com",
+    "rapidshorts.ai@gmail.com",
+    "tonixx@gmail.com",
+    "sneakyguysaas@gmail.com",
+    "social@imagitime.com",
+]
+
 async def run_daily_digest_job():
     """Fetches users opted in for daily digests, conditionally analyzes brands, and sends emails."""
     logger.info("Starting daily digest job...")
@@ -289,6 +305,11 @@ async def run_daily_digest_job():
         current_date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         for user in users_for_digest:
+            # Skip users who already received digests today
+            if user.email in SKIP_EMAILS:
+                logger.info(f"Skipping {user.email} - already received digest today")
+                continue
+                
             logger.info(f"Processing digest for user: {user.email}")
             user_brands = BrandCRUD.get_user_brands(db, user_email=user.email)
             
