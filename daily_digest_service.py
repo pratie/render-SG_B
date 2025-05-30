@@ -111,7 +111,7 @@ async def analyze_brand_for_digest_update(brand: Brand, db: Session, reddit_clie
                         new_mentions_this_run +=1
             
             # Fetch top posts from last 24 hours
-            async for post in subreddit_obj.top(time_filter='day', limit=100): # 'day' is last 24h
+            async for post in subreddit_obj.top(time_filter='day', limit=200): # 'day' is last 24h
                 if post.url in processed_urls_in_session: # Already processed by .new() or earlier .top()
                     continue
                 processed_urls_in_session.add(post.url)
