@@ -118,7 +118,7 @@ async def startup_event():
     # Example: Run daily at 08:00 UTC
     scheduler.add_job(
         run_daily_digest_job,
-        trigger=CronTrigger(hour=14, minute=0, timezone="UTC"),  # 10 AM EDT, 7 AM PDT
+        trigger=CronTrigger(hour=16, minute=30, timezone="UTC"),  # 10 AM EDT, 7 AM PDT
         id="daily_digest_job", 
         name="Daily Reddit Digest Email Job",
         replace_existing=True
