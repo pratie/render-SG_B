@@ -43,8 +43,17 @@ if RESEND_API_KEY:
 else:
     logger.error("RESEND_API_KEY not found in .env. Email sending will FAIL.")
 
-async def analyze_brand_for_digest_update(brand: Brand, db: Session, reddit_client: asyncpraw.Reddit):
+BRANDS_ANALYZED_THIS_RUN = set()
+
+async def analyze_brand_for_digest_update(db: Session, brand: Brand, reddit_client: asyncpraw.Reddit):
+    """Conditionally analyze a brand's subreddits if needed, updating mentions for digest."""
+    # Skip if already analyzed in this run
+    if brand.id in BRANDS_ANALYZED_THIS_RUN:
+        logger.info(f"Brand ID {brand.id} already analyzed in this run, skipping")
+        return
+        
     logger.info(f"Starting conditional analysis for Brand ID {brand.id} ('{brand.name}') for digest update.")
+    BRANDS_ANALYZED_THIS_RUN.add(brand.id)
     try:
         current_keywords = brand.keywords_list
         current_subreddits = brand.subreddits_list
@@ -59,9 +68,13 @@ async def analyze_brand_for_digest_update(brand: Brand, db: Session, reddit_clie
         db.commit()
         return
 
+    # Get existing mentions and create lookup by URL
     existing_mentions_db = {m.url: m for m in db.query(RedditMention).filter(RedditMention.brand_id == brand.id).all()}
     subreddit_last_analyzed_for_brand = brand.subreddit_last_analyzed_dict
+    
+    # Track mentions we've seen in this analysis run
     processed_urls_in_session = set()
+    processed_titles_in_session = set()  # Also track by title to catch reposts
     new_mentions_this_run = 0
     updated_mentions_this_run = 0
 
@@ -69,10 +82,18 @@ async def analyze_brand_for_digest_update(brand: Brand, db: Session, reddit_clie
     analysis_since_datetime = datetime.now(timezone.utc) - timedelta(hours=24)
 
     for subreddit_name in current_subreddits:
-        clean_subreddit_name = subreddit_name.replace('r/', '')
-        logger.info(f"Analyzing r/{clean_subreddit_name} for Brand ID {brand.id} (last 24 hours).")
-        max_post_timestamp_in_subreddit = subreddit_last_analyzed_for_brand.get(clean_subreddit_name, 0)
+        clean_subreddit_name = subreddit_name.replace('r/', '').lower() # Also lowercase for consistency
+        # Skip if already scanned in this run
+        scan_key = f"{brand.id}:{clean_subreddit_name}" # Use clean_subreddit_name for the key
+        if scan_key in SUBREDDITS_SCANNED_THIS_RUN:
+            logger.info(f"Subreddit r/{clean_subreddit_name} already scanned for Brand ID {brand.id} in this run, skipping")
+            continue
         
+        # Add a delay before processing a new subreddit to respect Reddit API rate limits
+        await asyncio.sleep(REDDIT_API_CALL_DELAY)
+            
+        logger.info(f"Analyzing r/{clean_subreddit_name} for Brand ID {brand.id} (last 24 hours).")
+        SUBREDDITS_SCANNED_THIS_RUN.add(scan_key)
         try:
             subreddit_obj = await reddit_client.subreddit(clean_subreddit_name)
             
@@ -80,9 +101,13 @@ async def analyze_brand_for_digest_update(brand: Brand, db: Session, reddit_clie
             async for post in subreddit_obj.new(limit=100): # Limit to avoid excessive calls
                 if post.created_utc < analysis_since_datetime.timestamp():
                     break # Stop if posts are older than our 24-hour window
-                if post.url in processed_urls_in_session:
+                    
+                # Skip if we've seen this URL or title before
+                if post.url in processed_urls_in_session or post.title in processed_titles_in_session:
                     continue
+                    
                 processed_urls_in_session.add(post.url)
+                processed_titles_in_session.add(post.title)
                 max_post_timestamp_in_subreddit = max(max_post_timestamp_in_subreddit, int(post.created_utc))
 
                 post_text = f"{post.title} {post.selftext if post.selftext else ''}".lower()
@@ -253,27 +278,43 @@ async def send_digest_email_async(recipient_email: str, html_content: str, subje
         logger.error(f"Error sending digest email to {recipient_email}: {e}", exc_info=True)
         return False
 
-# List of emails that already received digests today - to be removed tomorrow
-SKIP_EMAILS = [
-    "s.karthik.2k9@gmail.com",
-    "sombirvats@gmail.com",
-    "zubin.ajmera@pspdfkit.com",
-    "nitinbansal85.v2.1@gmail.com",
-    "aliimran16520@gmail.com",
-    "eswarpoluri@gmail.com",
-    "leonsbox@gmail.com",
-    "prathapsaik17@gmail.com",
-    "rapidshorts.ai@gmail.com",
-    "tonixx@gmail.com",
-    "sneakyguysaas@gmail.com",
-    "social@imagitime.com",
-]
+
+from asyncio import sleep
+
+# Delay between Reddit API calls to a new subreddit to avoid rate limits
+REDDIT_API_CALL_DELAY = 1.0  # seconds
+
+# Track emails sent in this run to prevent duplicates
+EMAILS_SENT_THIS_RUN = set()
+
+# Track brands analyzed in this run
+BRANDS_ANALYZED_THIS_RUN = set()
+
+# Track subreddits scanned in this run
+SUBREDDITS_SCANNED_THIS_RUN = set()
+
+# Lock to prevent concurrent runs
+digest_job_lock = asyncio.Lock()
+
+# Rate limit for email sending (2 per second as per Resend limits)
+EMAIL_RATE_LIMIT = 0.5  # 500ms between emails
 
 async def run_daily_digest_job():
     """Fetches users opted in for daily digests, conditionally analyzes brands, and sends emails."""
-    logger.info("Starting daily digest job...")
-    db_gen = get_db()
-    db: Session = next(db_gen)
+    if digest_job_lock.locked():
+        logger.info("Daily digest job already running, skipping this run")
+        return
+        
+    async with digest_job_lock:
+        logger.info("Starting daily digest job...")
+        
+        # Clear tracking sets for the new run
+        EMAILS_SENT_THIS_RUN.clear()
+        BRANDS_ANALYZED_THIS_RUN.clear()
+        SUBREDDITS_SCANNED_THIS_RUN.clear()
+        
+        db_gen = get_db()
+        db: Session = next(db_gen)
     
     reddit_client = None
     aiohttp_session = None
@@ -313,10 +354,13 @@ async def run_daily_digest_job():
         current_date_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         for user in users_for_digest:
-            # Skip users who already received digests today
-            if user.email in SKIP_EMAILS:
-                logger.info(f"Skipping {user.email} - already received digest today")
+            # Skip users who already received digests in this run
+            if user.email in EMAILS_SENT_THIS_RUN:
+                logger.info(f"Skipping {user.email} - already received digest in this run")
                 continue
+            
+            # Add to emails sent this run
+            EMAILS_SENT_THIS_RUN.add(user.email)
                 
             logger.info(f"Processing digest for user: {user.email}")
             user_brands = BrandCRUD.get_user_brands(db, user_email=user.email)
