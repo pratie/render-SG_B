@@ -200,7 +200,8 @@ class RedditMentionCRUD:
         """Get mentions for specified brand_ids created after since_datetime."""
         if not brand_ids:
             return []
-        return (
+        # First get all mentions
+        mentions = (
             db.query(RedditMention)
             .filter(
                 RedditMention.brand_id.in_(brand_ids),
@@ -209,6 +210,16 @@ class RedditMentionCRUD:
             .order_by(desc(RedditMention.created_at))
             .all()
         )
+        
+        # Deduplicate by URL, keeping the latest version of each mention
+        seen_urls = set()
+        unique_mentions = []
+        for mention in mentions:
+            if mention.url not in seen_urls:
+                seen_urls.add(mention.url)
+                unique_mentions.append(mention)
+        
+        return unique_mentions
 
     @staticmethod
     def get_brand_mentions(

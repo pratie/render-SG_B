@@ -89,26 +89,34 @@ async def analyze_brand_for_digest_update(brand: Brand, db: Session, reddit_clie
                 matching_keywords_found = [kw for kw in current_keywords if kw.lower() in post_text]
 
                 if matching_keywords_found:
-                    # Simplified logic from _perform_brand_reddit_analysis
+                    # Check for existing mention and update if needed
                     existing_mention = existing_mentions_db.get(post.url)
                     if existing_mention:
-                        changed = False
-                        if existing_mention.score != post.score: existing_mention.score = post.score; changed = True
-                        # Add other fields to update if necessary
-                        if changed:
-                            logger.info(f"Updating existing mention (new posts scan): {post.title} for Brand ID {brand.id}")
+                        # Only update if score has changed
+                        if existing_mention.score != post.score:
+                            existing_mention.score = post.score
+                            existing_mention.num_comments = post.num_comments  # Update comments too
+                            logger.info(f"Updating existing mention: {post.title} for Brand ID {brand.id} (Score: {post.score})")
                             updated_mentions_this_run += 1
+                            db.commit()  # Commit the update
                     else:
-                        logger.info(f"Found new mention (new posts scan): {post.title} for Brand ID {brand.id}")
+                        logger.info(f"Found new mention: {post.title} for Brand ID {brand.id} (Score: {post.score})")
                         new_mention = RedditMention(
-                            brand_id=brand.id, url=post.url, title=post.title, content=post.selftext or "",
-                            subreddit=clean_subreddit_name, score=post.score, num_comments=post.num_comments,
+                            brand_id=brand.id,
+                            url=post.url,
+                            title=post.title,
+                            content=post.selftext or "",
+                            subreddit=clean_subreddit_name,
+                            score=post.score,
+                            num_comments=post.num_comments,
                             created_at=datetime.fromtimestamp(post.created_utc, timezone.utc),
-                            keyword=json.dumps(matching_keywords_found), relevance_score=50 # Default score
+                            keyword=json.dumps(matching_keywords_found),
+                            relevance_score=50  # Default score
                         )
                         db.add(new_mention)
-                        existing_mentions_db[post.url] = new_mention # Add to current session's cache
-                        new_mentions_this_run +=1
+                        existing_mentions_db[post.url] = new_mention  # Add to cache
+                        new_mentions_this_run += 1
+                        db.commit()  # Commit each new mention
             
             # Fetch top posts from last 24 hours
             async for post in subreddit_obj.top(time_filter='day', limit=200): # 'day' is last 24h
