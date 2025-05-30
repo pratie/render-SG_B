@@ -114,17 +114,24 @@ async def startup_event():
     init_db()
     logging.info("Database initialized") # Use your existing logger if preferred
 
+    # Configure the scheduler for production use
+    scheduler.configure(
+        {"apscheduler.job_defaults.max_instances": 1}  # Ensure only one instance of each job runs
+    )
+
     # Schedule the daily digest job
-    # Example: Run daily at 08:00 UTC
     scheduler.add_job(
         run_daily_digest_job,
         trigger=CronTrigger(hour=16, minute=30, timezone="UTC"),  # 10 AM EDT, 7 AM PDT
         id="daily_digest_job", 
         name="Daily Reddit Digest Email Job",
-        replace_existing=True
+        replace_existing=True,
+        misfire_grace_time=3600,  # Allow job to run up to 1 hour late
+        coalesce=True  # Combine multiple waiting runs into one
     )
+    
     scheduler.start()
-    logging.info("APScheduler started. Daily digest job scheduled.")
+    logging.info("APScheduler started. Daily digest job scheduled with concurrency protection.")
 
 @app.get(
     "/projects/", 
