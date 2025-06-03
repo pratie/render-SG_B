@@ -99,6 +99,7 @@ class RedditMention(Base):
     num_comments = Column(Integer, default=0)
     relevance_score = Column(Integer, default=0)
     suggested_comment = Column(Text, default="")
+    intent = Column(String, nullable=True)  # Added intent column
     created_at = Column(DateTime, default=datetime.utcnow)
     created_utc = Column(Integer, default=lambda: int(datetime.utcnow().timestamp()))
 
@@ -123,6 +124,7 @@ class RedditMention(Base):
         kwargs.setdefault('num_comments', 0)
         kwargs.setdefault('relevance_score', 0)
         kwargs.setdefault('suggested_comment', "")
+        kwargs.setdefault('intent', None) # Default intent to None
         kwargs.setdefault('created_utc', int(datetime.utcnow().timestamp()))
         
         super().__init__(**kwargs)
@@ -294,6 +296,7 @@ class RedditMentionResponse(BaseModel):
     num_comments: int = 0
     relevance_score: int = 0
     suggested_comment: str = ""
+    intent: str = "other"
     created_at: datetime
     created_utc: int
     formatted_date: str = ""

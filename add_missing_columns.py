@@ -55,6 +55,19 @@ def add_missing_columns():
                 else:
                     logger.info("'subreddit_last_analyzed' column already exists (re-checked).")
 
+                # Check and add 'intent' column to 'reddit_mentions' table
+                result_mentions = connection.execute(text("PRAGMA table_info(reddit_mentions)"))
+                columns_mentions = [row[1] for row in result_mentions.fetchall()]
+
+                if 'intent' not in columns_mentions:
+                    logger.info("Adding 'intent' column to 'reddit_mentions' table...")
+                    connection.execute(
+                        text("ALTER TABLE reddit_mentions ADD COLUMN intent TEXT")
+                    )
+                    logger.info("Successfully added 'intent' column to 'reddit_mentions' table.")
+                else:
+                    logger.info("'intent' column already exists in 'reddit_mentions' table.")
+
             logger.info("Database schema updated successfully!")
             
         except Exception as e:

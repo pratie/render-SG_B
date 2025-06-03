@@ -34,9 +34,7 @@ import ssl
 import aiohttp
 import random
 from fastapi.staticfiles import StaticFiles
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from daily_digest_service import run_daily_digest_job
+
 import logging
 
 from fastapi.responses import JSONResponse
@@ -107,31 +105,11 @@ app.add_middleware(
 )
 
 # Initialize database on startup
-scheduler = AsyncIOScheduler(timezone="UTC") # Or your preferred timezone
 
 @app.on_event("startup")
 async def startup_event():
     init_db()
     logging.info("Database initialized") # Use your existing logger if preferred
-
-    # Configure the scheduler for production use
-    scheduler.configure(
-        {"apscheduler.job_defaults.max_instances": 1}  # Ensure only one instance of each job runs
-    )
-
-    # Schedule the daily digest job
-    scheduler.add_job(
-        run_daily_digest_job,
-        trigger=CronTrigger(hour=15, minute=10, timezone="UTC"),  # 10 AM EDT, 7 AM PDT
-        id="daily_digest_job", 
-        name="Daily Reddit Digest Email Job",
-        replace_existing=True,
-        misfire_grace_time=3600,  # Allow job to run up to 1 hour late
-        coalesce=True  # Combine multiple waiting runs into one
-    )
-    
-    scheduler.start()
-    logging.info("APScheduler started. Daily digest job scheduled with concurrency protection.")
 
 @app.get(
     "/projects/", 
@@ -425,60 +403,80 @@ What They Do: {brand_description}
     except Exception as e:
         logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
         return "Sorry, I'm having trouble generating a response right now."
-# def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
-#     """Generate relevance score between post and brand"""
-#     try:
-#         brand = db.query(Brand).filter(Brand.id == brand_id).first()
-#         if not brand:
-#             raise ValueError(f"Brand with id {brand_id} not found")
+def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
+    """Generate relevance score between post and brand"""
+    try:
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
+        if not brand:
+            raise ValueError(f"Brand with id {brand_id} not found")
 
-#         system_message = """
-#         You are an expert content analyzer specializing in determining relevance between social media posts and brand offerings. Your task is to analyze the similarity between a given post and a brand's offering, providing a relevance score from 20-100.
+        system_message = """
+        You are an expert Reddit post analyzer specializing in determining relevance between social media posts and brand offerings.
+        Your task is to analyze the similarity between a given Reddit post and a brand’s offering.
 
-#         Scoring Guide:
-#         - 90-100: Exceptional match (direct need-solution fit)
-#         - 70-89: Strong match (clear alignment with some minor gaps)
-#         - 50-69: Moderate match (partial alignment)
-#         - 35-49: Basic match (some relevant elements)
-#         - 20-34: Minimal match (few overlapping elements)
+        Return your answer strictly in this JSON format:
+        {
+          "relevance_score": [20-100],
+          "explanation": "[2-3 sentence explanation of the score]",
+          "intent": "[purchase_intent | solution_seeking | recommendation_request | comparison | complaint | feature_request | product_feedback | general_interest | unaware_prospect | other]"
+        }
 
-#         Your output must be in this exact format:
-#         Relevance Score: [20-100]
-#         Explanation: [2-3 sentences explaining the score]
-#         """
+        Scoring Guide:
+        - 90-100: Exceptional match (direct need-solution fit)
+        - 70-89: Strong match (clear alignment with some minor gaps)
+        - 50-69: Moderate match (partial alignment)
+        - 35-49: Basic match (some relevant elements)
+        - 20-34: Minimal match (few overlapping elements)
 
-#         prompt = f"""
-#         Analyze the relevance between this post and brand:
+        Example Output:
+        {
+          "relevance_score": 85,
+          "explanation": "The post discusses pain points that align closely with the brand's core offerings, suggesting strong potential interest. Minor mismatch in use case keeps it from scoring higher.",
+          "intent": "solution_seeking"
+        }
+        """
 
-#         Post Title: {post_title}
-#         Post Content: {post_content}
-#         Brand Name: {brand.name}
-#         Brand Description: {brand.description}
-#         """
+        prompt = f"""
+        Analyze the relevance between this Reddit post and the brand.
 
-#         response = anthropic_client.messages.create(
-#             model="claude-3-haiku-20240307",
-#             max_tokens=200,
-#             temperature=0.5,
-#             system=system_message,
-#             messages=[
-#                 {"role": "user", "content": prompt}
-#             ]
-#         )
+        Post Title: {post_title}
+        Post Content: {post_content}
 
-#         response_text = response.content[0].text
-        
-#         # Extract just the score
-#         score_line = response_text.split('\n')[0]
-#         score = int(''.join(filter(str.isdigit, score_line)))
-        
-#         # Ensure score is within 20-100 range
-#         return max(20, min(100, score))
+        Brand Name: {brand.name}
+        Brand Description: {brand.description}
+        """
 
-#     except Exception as e:
-#         logging.error(f"Error generating relevance score: {str(e)}")
-#         # Return a default score in case of error
-#         return 20
+        response = anthropic_client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=300,
+            temperature=0.3,
+            system=system_message,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        raw_output = response.content[0].text.strip()
+        print("Raw Claude Output:", raw_output)
+
+        try:
+            parsed = json.loads(raw_output)
+            score = parsed.get("relevance_score", 20)
+            explanation = parsed.get("explanation", "")
+            intent = parsed.get("intent", "other")
+        except json.JSONDecodeError:
+            print("Failed to parse Claude response as JSON.")
+            return 20, "Failed to parse response", "other"
+
+        score = max(20, min(100, int(score)))
+        print(f"Post Title: {post_title}\nScore: {score}\nExplanation: {explanation}\nIntent: {intent}")
+        return score, explanation, intent
+
+    except Exception as e:
+        print(f"Error generating relevance score: {e}")
+        return 20, "Error during scoring", "other"
+    except Exception as e:
+        logging.error(f"Error generating relevance score: {str(e)}")
+        # Return a default score in case of error
+        return 20
 
 @app.post("/analyze/initial", response_model=KeywordResponse, tags=["analysis"])
 @get_analysis_rate_limit() 
@@ -558,7 +556,7 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
 
                 if last_analyzed_ts == 0:
                     is_initial_scan_for_subreddit = True
-                    effective_limit =  1000
+                    effective_limit =  70
                     effective_time_period = "month"
                     logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
                     posts_iterator = subreddit_obj.top(time_filter=effective_time_period, limit=effective_limit)
@@ -585,36 +583,43 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                     
                     if matching_keywords:
                         existing_mention_from_db = existing_mentions_db.get(post_url)
-                        relevance_score = 50
-                        suggested_comment = "This feature will be live soon! Stay tuned!😊"
-
+                        
+                        # For existing posts, only update dynamic fields
                         if existing_mention_from_db:
                             changed = False
-                            if existing_mention_from_db.score != post.score: existing_mention_from_db.score = post.score; changed = True
-                            if existing_mention_from_db.num_comments != post.num_comments: existing_mention_from_db.num_comments = post.num_comments; changed = True
-                            current_matching_keywords_json = json.dumps(matching_keywords, sort_keys=True)
-                            if current_matching_keywords_json != existing_mention_from_db.matching_keywords:
-                                existing_mention_from_db.matching_keywords = current_matching_keywords_json; changed = True
-                            
+                            if existing_mention_from_db.num_comments != post.num_comments:
+                                existing_mention_from_db.num_comments = post.num_comments
+                                changed = True
                             if changed:
-                                db.add(existing_mention_from_db)
+                                db.commit()
                                 updated_mentions_count += 1
-                                logging.info(f"Updated existing mention for Brand ID {brand_id}: {post.title}")
-                        else:
-                            new_mention = RedditMention(
-                                brand_id=brand.id, title=post.title,
-                                content=post.selftext[:10000] if post.selftext else "",
-                                url=post_url, subreddit=clean_subreddit_name,
-                                keyword=matching_keywords[0],
-                                matching_keywords=json.dumps(matching_keywords, sort_keys=True),
-                                score=post.score, num_comments=post.num_comments,
-                                relevance_score=relevance_score, suggested_comment=suggested_comment,
-                                created_utc=int(post.created_utc)
-                            )
-                            db.add(new_mention)
-                            existing_mentions_db[post_url] = new_mention
-                            new_mentions_count += 1
-                            logging.info(f"Found new mention for Brand ID {brand_id}: {post.title}")
+                            continue  # Skip to next post as we've updated what we needed
+                            
+                        # For new posts, calculate all fields including relevance score and intent
+                        relevance_score, explanation_line, intent_line = generate_relevance_score(post.title, post.selftext, brand_id, db)
+                        suggested_comment = explanation_line
+                        intent = intent_line
+
+
+                        # Create new mention
+                        new_mention = RedditMention(
+                            brand_id=brand.id,
+                            title=post.title,
+                            content=post.selftext if post.selftext else "",
+                            url=post_url,
+                            subreddit=clean_subreddit_name,
+                            keyword=matching_keywords[0] if matching_keywords else "",
+                            matching_keywords=json.dumps(matching_keywords),
+                            score=post.score,
+                            num_comments=post.num_comments,
+                            relevance_score=relevance_score,
+                            suggested_comment=suggested_comment,
+                            intent=intent,
+                            created_utc=int(post.created_utc)
+                        )
+                        db.add(new_mention)
+                        new_mentions_count += 1
+                        logger.info(f"Added new mention for Brand ID {brand_id}, Post: {post.title[:50]}... URL: {post_url}")
                 
                 if processed_count_in_subreddit > 0 or is_initial_scan_for_subreddit:
                     subreddit_last_analyzed[clean_subreddit_name] = int(datetime.utcnow().timestamp())
@@ -985,6 +990,7 @@ async def get_brand_mentions(
                 "score": mention.score or 0,
                 "num_comments": mention.num_comments or 0,
                 "relevance_score": mention.relevance_score or 0,
+                "intent": mention.intent or "",
                 "suggested_comment": mention.suggested_comment or "",
                 "created_at": mention.created_at or datetime.utcnow(),
                 "created_utc": mention.created_utc or int(datetime.utcnow().timestamp()),

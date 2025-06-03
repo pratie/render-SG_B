@@ -2,6 +2,9 @@
 
 fresh_env/
 .env
+Environment/
+env
+fresh_env
 env/
 .env    
 .env
@@ -80,7 +83,6 @@ reddit_db_analysis.py
 tablest.py
 main_backup.py
 test.py
-streamlit_new.py
 update_paid_user_alerts.py
 test_resend.py
 monitor_reddit.py

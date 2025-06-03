@@ -69,6 +69,22 @@ def update_user_payment(email, has_paid, stripe_payment_id=None):
         except Exception as e:
             return False, f"Error: {str(e)}"
 
+def get_mentions_by_email(email):
+    """Get all Reddit mentions for a user's brands by email."""
+    with get_db_connection() as conn:
+        query = """
+            SELECT 
+                m.id, m.title, m.subreddit, m.score, m.num_comments,
+                m.relevance_score, m.created_at, m.url, 
+                b.name as brand_name, m.intent, m.suggested_comment
+            FROM reddit_mentions m
+            JOIN brands b ON m.brand_id = b.id
+            WHERE b.user_email = ?
+            ORDER BY m.created_at DESC
+        """
+        df = pd.read_sql_query(query, conn, params=(email,))
+        return df
+
 def get_user_preferences(email):
     """Get user preferences from database."""
     with get_db_connection() as conn:
@@ -180,7 +196,7 @@ def show_admin_dashboard():
                     st.error(message)
 
     # Main content tabs
-    tabs = st.tabs(["Users", "Reddit Mentions", "Brands", "Reddit Comments", "User Preferences", "Reddit Auth Status", "Alert Settings"])
+    tabs = st.tabs(["Users", "Reddit Mentions", "Brands", "Reddit Comments", "User Preferences", "Reddit Auth Status", "Alert Settings", "Mentions by Email"])
     
     with tabs[0]:
         st.subheader("Users")
@@ -316,7 +332,104 @@ def show_admin_dashboard():
             for col in datetime_cols:
                 if col in alert_settings_df.columns:
                     alert_settings_df[col] = pd.to_datetime(alert_settings_df[col], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
-            
+        st.dataframe(alert_settings_df, use_container_width=True)
+        
+    with tabs[7]:
+        st.subheader("View Mentions by Email")
+        email_to_search = st.text_input("Enter user email to view their brand mentions:")
+        
+        if email_to_search:
+            if not validate_email(email_to_search):
+                st.error("Please enter a valid email address")
+            else:
+                mentions_df = get_mentions_by_email(email_to_search)
+                if not mentions_df.empty:
+                    st.write(f"### Found {len(mentions_df)} mentions for {email_to_search}")
+                    
+                    # Convert datetime for display
+                    if 'created_at' in mentions_df.columns:
+                        mentions_df['created_at'] = pd.to_datetime(mentions_df['created_at'])
+                    
+                    # Show summary stats
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Mentions", len(mentions_df))
+                    with col2:
+                        st.metric("Unique Subreddits", mentions_df['subreddit'].nunique())
+                    with col3:
+                        st.metric("Avg. Relevance Score", 
+                                f"{mentions_df['relevance_score'].mean():.1f}" if 'relevance_score' in mentions_df.columns else "N/A")
+                    
+                    # Show the data in an expandable section
+                    with st.expander("View All Mentions", expanded=True):
+                        st.dataframe(
+                            mentions_df[[
+                                'created_at', 'brand_name', 'subreddit', 
+                                'title', 'relevance_score', 'intent', 'suggested_comment', 'url'
+                            ]],
+                            column_config={
+                                "url": st.column_config.LinkColumn("Post Link"),
+                                "created_at": "Date",
+                                "relevance_score": st.column_config.NumberColumn(
+                                    "Relevance",
+                                    format="%d",
+                                    min_value=0,
+                                    max_value=100
+                                ),
+                                "suggested_comment": st.column_config.TextColumn(
+                                    "Suggested Comment",
+                                    width="large"
+                                ),
+                                "title": st.column_config.TextColumn(
+                                    "Title",
+                                    width="medium"
+                                )
+                            },
+                            hide_index=True,
+                            use_container_width=True,
+                            height=min(400, 50 + (len(mentions_df) * 35))  # Dynamic height based on number of rows
+                        )
+                    
+                    # Add a section to view individual mentions with more details
+                    if not mentions_df.empty:
+                        st.subheader("View Detailed Mention")
+                        mention_idx = st.selectbox(
+                            "Select a mention to view details:",
+                            range(len(mentions_df)),
+                            format_func=lambda i: f"{mentions_df.iloc[i]['title'][:50]}..."
+                        )
+                        
+                        mention = mentions_df.iloc[mention_idx]
+                        with st.container(border=True):
+                            st.markdown(f"**Brand:** {mention['brand_name']}")
+                            st.markdown(f"**Subreddit:** r/{mention['subreddit']}")
+                            st.markdown(f"**Title:** {mention['title']}")
+                            st.markdown(f"**Date:** {mention['created_at'].strftime('%Y-%m-%d %H:%M')}")
+                            st.markdown(f"**Relevance Score:** {int(mention['relevance_score'])}/100")
+                            st.markdown(f"**Intent:** {mention['intent'] or 'N/A'}")
+                            st.markdown("**Suggested Comment:**")
+                            st.markdown(f"```\n{mention['suggested_comment'] or 'No suggested comment available.'}\n```")
+                            st.markdown(f"[View on Reddit]({mention['url']})")
+                            
+                            # Add a button to copy the suggested comment
+                            if pd.notna(mention['suggested_comment']) and mention['suggested_comment']:
+                                st.download_button(
+                                    "Copy Comment to Clipboard",
+                                    data=mention['suggested_comment'],
+                                    file_name=f"comment_{mention_idx}.txt",
+                                    mime="text/plain"
+                                )
+                    
+                    # Download button
+                    csv = mentions_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        "Download as CSV",
+                        data=csv,
+                        file_name=f"mentions_{email_to_search}_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.info(f"No mentions found for {email_to_search}")
             # Display metrics
             col1, col2 = st.columns(2)
             with col1:
