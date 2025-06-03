@@ -296,7 +296,7 @@ class RedditMentionResponse(BaseModel):
     num_comments: int = 0
     relevance_score: int = 0
     suggested_comment: str = ""
-    intent: str = "other"
+    intent: str = "unknown"
     created_at: datetime
     created_utc: int
     formatted_date: str = ""
@@ -356,7 +356,9 @@ class RedditMentionResponse(BaseModel):
         data.setdefault('relevance_score', 0)
         data.setdefault('suggested_comment', "")
         data.setdefault('created_utc', int(datetime.utcnow().timestamp()))
-        
+        # Ensure intent is a string, default to 'unknown' if None or missing
+        if not data.get('intent'):
+            data['intent'] = 'unknown'
         return cls(**data)
 
 class AnalysisResponse(BaseModel):
