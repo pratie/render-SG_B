@@ -5,8 +5,9 @@ from datetime import datetime, timedelta
 import json
 from typing import List, Optional, Dict, Any
 import logging
+import secrets
 
-from models import User, Brand, RedditMention, RedditComment, AlertSetting # Added AlertSetting
+from models import User, Brand, RedditMention, RedditComment, AlertSetting, MagicToken # Added AlertSetting and MagicToken
 from fastapi import HTTPException
 
 class UserCRUD:
@@ -39,6 +40,36 @@ class UserCRUD:
         return db_user
 
 # ... (end of UserCRUD class) ...
+
+class MagicTokenCRUD:
+    @staticmethod
+    def create_magic_token(db: Session, email: str) -> MagicToken:
+        """Create a new magic token for a user."""
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(minutes=15)  # Token valid for 15 minutes
+        db_token = MagicToken(
+            user_email=email,
+            token=token,
+            expires_at=expires_at
+        )
+        db.add(db_token)
+        db.commit()
+        db.refresh(db_token)
+        return db_token
+
+    @staticmethod
+    def get_magic_token(db: Session, token: str) -> Optional[MagicToken]:
+        """Get a magic token by its value."""
+        return db.query(MagicToken).filter(MagicToken.token == token).first()
+
+    @staticmethod
+    def use_magic_token(db: Session, db_token: MagicToken) -> MagicToken:
+        """Mark a magic token as used."""
+        db_token.used = True
+        db.commit()
+        db.refresh(db_token)
+        return db_token
+
 
 class AlertSettingCRUD:
     @staticmethod

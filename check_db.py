@@ -14,3 +14,7 @@ for column in inspector.get_columns('users'):
 print("\nBrands table columns:")
 for column in inspector.get_columns('brands'):
     print(f"- {column['name']}: {column['type']}")
+
+# print("User auth table columns:")
+# for column in inspector.get_columns('reddit_tokens'):
+#     print(f"- {column['name']}: {column['type']}")

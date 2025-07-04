@@ -1,15 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
 
+from utils import send_magic_link_email
+
 from database import get_db, DATABASE_URL
-from crud import UserCRUD
+from crud import UserCRUD, MagicTokenCRUD
 from . import config
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 security = HTTPBearer()
+
+class EmailSchema(BaseModel):
+    email: EmailStr
+
+class MagicTokenSchema(BaseModel):
+    token: str
 
 def get_db_path():
     """Extract database path from DATABASE_URL"""
@@ -79,7 +89,60 @@ async def google_login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-@router.get("/google-login", tags=["authentication"])
+@router.post("/request-login-link", tags=["authentication"])
+async def request_login_link(
+    data: EmailSchema,
+    db: Session = Depends(get_db)
+):
+    """Request a magic login link to be sent by email."""
+    # We don't reveal if the user exists to prevent email enumeration
+    # We can create the user here if they don't exist, or do it upon verification
+    user = UserCRUD.get_user_by_email(db, data.email)
+    if not user:
+        # Optionally create the user now
+        user = UserCRUD.create_user(db, data.email)
+
+    magic_token = MagicTokenCRUD.create_magic_token(db, data.email)
+    send_magic_link_email(email=data.email, token=magic_token.token)
+    return {"message": "If an account with that email exists, a login link has been sent."}
+
+
+@router.post("/verify-magic-token", tags=["authentication"])
+async def verify_magic_token(
+    data: MagicTokenSchema,
+    db: Session = Depends(get_db)
+):
+    """Verify a magic token and log the user in."""
+    db_token = MagicTokenCRUD.get_magic_token(db, data.token)
+
+    if not db_token or db_token.used or db_token.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired login link."
+        )
+
+    # Mark token as used
+    MagicTokenCRUD.use_magic_token(db, db_token)
+
+    # Get or create user
+    user = UserCRUD.get_user_by_email(db, db_token.user_email)
+    if not user:
+        # This case is unlikely if we create the user on request, but as a fallback
+        user = UserCRUD.create_user(db, db_token.user_email)
+    else:
+        UserCRUD.update_last_login(db, db_token.user_email)
+
+    # Create access token
+    access_token = config.create_access_token(user.email)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "email": user.email
+    }
+
+
+@router.get("/google-login", tags=["authentication"]) 
 async def google_login_get(
     token: str = Query(...),
     db: Session = Depends(get_db)

@@ -20,16 +20,23 @@ def verify_google_token(token: str) -> str:
     """Verify Google OAuth token and return user's email"""
     try:
         idinfo = id_token.verify_oauth2_token(
-            token, requests.Request(), GOOGLE_CLIENT_ID)
+            token, requests.Request(), GOOGLE_CLIENT_ID, clock_skew_in_seconds=10)
         
         if idinfo['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
             raise ValueError('Wrong issuer.')
             
         return idinfo['email']
     except Exception as e:
+        # Log the detailed error for debugging on the server side
+        print("\n=== Google Token Verification Failed ===")
+        print(f"Client ID Used: {GOOGLE_CLIENT_ID}")
+        print(f"Error Details: {e}")
+        print("======================================\n")
+        
+        # Raise a more informative HTTP exception for the client
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Google token",
+            detail=f"Invalid Google token. Reason: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

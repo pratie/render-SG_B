@@ -32,6 +32,8 @@ REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
 REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET")
 REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "digest_service_agent/1.0")
 
+POST_AGE_LIMIT_DAYS = 7   # Consider posts up to 7 days old for broader analysis
+
 reddit_config = {
     "client_id": REDDIT_CLIENT_ID,
     "client_secret": REDDIT_CLIENT_SECRET,
@@ -78,8 +80,8 @@ async def analyze_brand_for_digest_update(db: Session, brand: Brand, reddit_clie
     new_mentions_this_run = 0
     updated_mentions_this_run = 0
 
-    # Define the time window for this analysis: last 24 hours
-    analysis_since_datetime = datetime.now(timezone.utc) - timedelta(hours=24)
+    # Define the time window for this analysis: last 7 days
+    analysis_since_datetime = datetime.now(timezone.utc) - timedelta(days=POST_AGE_LIMIT_DAYS)
 
     for subreddit_name in current_subreddits:
         clean_subreddit_name = subreddit_name.replace('r/', '').lower() # Also lowercase for consistency
@@ -89,18 +91,23 @@ async def analyze_brand_for_digest_update(db: Session, brand: Brand, reddit_clie
             logger.info(f"Subreddit r/{clean_subreddit_name} already scanned for Brand ID {brand.id} in this run, skipping")
             continue
         
+        max_post_timestamp_in_subreddit = 0 # Initialize for current subreddit
+
         # Add a delay before processing a new subreddit to respect Reddit API rate limits
         await asyncio.sleep(REDDIT_API_CALL_DELAY)
             
-        logger.info(f"Analyzing r/{clean_subreddit_name} for Brand ID {brand.id} (last 24 hours).")
+        logger.info(f"Analyzing r/{clean_subreddit_name} for Brand ID {brand.id} (last 7 days).")
         SUBREDDITS_SCANNED_THIS_RUN.add(scan_key)
         try:
             subreddit_obj = await reddit_client.subreddit(clean_subreddit_name)
             
             # Fetch new posts
             async for post in subreddit_obj.new(limit=100): # Limit to avoid excessive calls
-                if post.created_utc < analysis_since_datetime.timestamp():
-                    break # Stop if posts are older than our 24-hour window
+                # Check if post is older than our analysis window (e.g., 7 days)
+                if datetime.fromtimestamp(post.created_utc, timezone.utc) < analysis_since_datetime:
+                    # This post is older than our 'analysis_since_datetime' cutoff, so we can stop processing .new for this sub
+                    break 
+
                     
                 # Skip if we've seen this URL or title before
                 if post.url in processed_urls_in_session or post.title in processed_titles_in_session:
@@ -130,12 +137,12 @@ async def analyze_brand_for_digest_update(db: Session, brand: Brand, reddit_clie
                             brand_id=brand.id,
                             url=post.url,
                             title=post.title,
-                            content=post.selftext or "",
+                            content=post.selftext if post.selftext else "", # Aligned for consistency
                             subreddit=clean_subreddit_name,
                             score=post.score,
                             num_comments=post.num_comments,
                             created_at=datetime.fromtimestamp(post.created_utc, timezone.utc),
-                            keyword=json.dumps(matching_keywords_found),
+                            keyword=", ".join(matching_keywords_found), # Corrected keyword assignment
                             relevance_score=50  # Default score
                         )
                         db.add(new_mention)
@@ -143,8 +150,8 @@ async def analyze_brand_for_digest_update(db: Session, brand: Brand, reddit_clie
                         new_mentions_this_run += 1
                         db.commit()  # Commit each new mention
             
-            # Fetch top posts from last 24 hours
-            async for post in subreddit_obj.top(time_filter='day', limit=200): # 'day' is last 24h
+            # Fetch top posts from last 7 days
+            async for post in subreddit_obj.top(time_filter='week', limit=200): # 'week' is last 7 days
                 if post.url in processed_urls_in_session: # Already processed by .new() or earlier .top()
                     continue
                 processed_urls_in_session.add(post.url)
@@ -164,10 +171,15 @@ async def analyze_brand_for_digest_update(db: Session, brand: Brand, reddit_clie
                     else:
                         logger.info(f"Found new mention (top posts scan): {post.title} for Brand ID {brand.id}")
                         new_mention = RedditMention(
-                            brand_id=brand.id, url=post.url, title=post.title, content=post.selftext or "",
-                            subreddit=clean_subreddit_name, score=post.score, num_comments=post.num_comments,
-                            created_at=datetime.fromtimestamp(post.created_utc, timezone.utc),
-                            keyword=json.dumps(matching_keywords_found), relevance_score=50
+                            brand_id=brand.id,
+                            url=post.url,
+                            title=post.title,
+                            content=post.selftext if post.selftext else "",
+                            score=post.score,
+                            num_comments=post.num_comments,
+                            subreddit=clean_subreddit_name, # Use the cleaned name
+                            keyword=", ".join(matching_keywords_found),
+                            created_at=datetime.fromtimestamp(post.created_utc, timezone.utc) # Explicitly set from post's creation time
                         )
                         db.add(new_mention)
                         existing_mentions_db[post.url] = new_mention
@@ -447,31 +459,97 @@ async def run_manual_test_digest_for_user(db: Session, user_email: str, days_to_
         return
 
     user_brands = BrandCRUD.get_user_brands(db, user_email=user.email)
+    # Initialize Reddit client for conditional analysis
+    reddit_client = None
+    aiohttp_session = None
+    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
+        logger.warning("Reddit API credentials not configured for test run. Conditional analysis will be skipped.")
+    else:
+        try:
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context))
+            reddit_client = asyncpraw.Reddit(
+                **reddit_config,
+                requestor_class=asyncprawcore.Requestor,
+                requestor_kwargs={"session": aiohttp_session}
+            )
+            logger.info("Async PRAW Reddit client initialized for manual test conditional analysis.")
+        except Exception as e:
+            logger.error(f"Failed to initialize PRAW Reddit client for test: {e}", exc_info=True)
+            reddit_client = None
+            if aiohttp_session:
+                await aiohttp_session.close()
+                aiohttp_session = None
+
     if not user_brands:
         logger.info(f"User {user_email} has no brands. Sending 'no brands' digest for test.")
         html_content_no_brands = generate_digest_html_content(user, {}, days_to_check)
         await send_digest_email_async(user.email, html_content_no_brands, datetime.now(timezone.utc).strftime('%Y-%m-%d'))
-        return
+    else:
+        # Conditional analysis for each brand if Reddit client is available
+        if reddit_client:
+            logger.info(f"Performing conditional Reddit analysis for brands of user {user_email}...")
+            for brand_obj in user_brands:
+                last_analyzed_utc_naive = brand_obj.last_analyzed
+                needs_analysis = True
+                if last_analyzed_utc_naive:
+                    last_analyzed_utc_aware = last_analyzed_utc_naive.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - last_analyzed_utc_aware < timedelta(hours=12):
+                        needs_analysis = False
+                
+                if needs_analysis:
+                    logger.info(f"Brand ID {brand_obj.id} ('{brand_obj.name}') for user {user_email} needs analysis for test run.")
+                    try:
+                        # Pass db and reddit_client to analyze_brand_for_digest_update
+                        await analyze_brand_for_digest_update(db, brand_obj, reddit_client) 
+                    except Exception as e:
+                        logger.error(f"Error during conditional analysis for brand {brand_obj.id} in test run: {e}", exc_info=True)
+                else:
+                    logger.info(f"Brand ID {brand_obj.id} ('{brand_obj.name}') for user {user_email} analyzed recently. Skipping conditional analysis for test run.")
+        else:
+            logger.warning(f"Reddit client not available for test run. Skipping all conditional brand analysis for {user_email}.")
 
-    brand_ids = [brand.id for brand in user_brands]
-    since_datetime = datetime.now(timezone.utc) - timedelta(days=days_to_check)
-    recent_mentions = RedditMentionCRUD.get_recent_mentions_for_user_brands(db, brand_ids, since_datetime)
-    
-    brands_with_mentions: Dict[Brand, List[RedditMention]] = {brand: [] for brand in user_brands}
-    for mention in recent_mentions:
-        for brand in user_brands:
-            if mention.brand_id == brand.id:
-                brands_with_mentions[brand].append(mention)
-                break
-    
-    html_content = generate_digest_html_content(user, brands_with_mentions, days_to_check)
-    logger.info(f"Generated HTML for {user_email}. Attempting to send test email...")
+        # Fetch mentions for email (after potential analysis)
+        brand_ids = [brand.id for brand in user_brands]
+        since_datetime = datetime.now(timezone.utc) - timedelta(days=days_to_check)
+        recent_mentions = RedditMentionCRUD.get_recent_mentions_for_user_brands(db, brand_ids, since_datetime)
+        
+        brands_with_mentions: Dict[Brand, List[RedditMention]] = {brand: [] for brand in user_brands}
+        for mention in recent_mentions:
+            for brand in user_brands:
+                if mention.brand_id == brand.id:
+                    brands_with_mentions[brand].append(mention)
+                    break
+        
+        html_content = generate_digest_html_content(user, brands_with_mentions, days_to_check)
+        logger.info(f"Generated HTML for {user_email}. Attempting to send test email...")
+
+    # Close Reddit client session if it was opened
+    if aiohttp_session:
+        await aiohttp_session.close()
+        logger.info("AIOHTTP session for Reddit client closed for test run.")
+    if reddit_client and reddit_client._core._requestor._http:
+        await reddit_client._core._requestor._http.close() # type: ignore
+        logger.info("Reddit client's underlying HTTP session explicitly closed for test run.")
+
     await send_digest_email_async(user.email, html_content, datetime.now(timezone.utc).strftime('%Y-%m-%d'))
 
 if __name__ == "__main__":
-    logger.info(f"Running {__file__} standalone to execute run_daily_digest_job().")
+    # Initialize DB (important for standalone script execution)
+    init_db() 
+    db_gen = get_db()
+    db: Session = next(db_gen)
+
+    test_email = "chisangaputa1@gmail.com"
+    days = 7  # Check for mentions from the last 7 days
+
+    logger.info(f"Running manual digest test for {test_email} for the last {days} days.")
     try:
-        asyncio.run(run_daily_digest_job())
-        logger.info("Daily digest job completed successfully.")
+        # Since run_manual_test_digest_for_user is async, we run it in an event loop
+        asyncio.run(run_manual_test_digest_for_user(db=db, user_email=test_email, days_to_check=days))
+        logger.info(f"Manual digest test for {test_email} initiated.")
     except Exception as e:
-        logger.error(f"Error during standalone execution: {e}", exc_info=True)
+        logger.error(f"Error running manual digest test: {e}", exc_info=True)
+    finally:
+        db.close()
+        logger.info("Database session closed.")

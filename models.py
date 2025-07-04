@@ -187,6 +187,16 @@ class RedditOAuthState(Base):
 
     user = relationship("User", back_populates="reddit_oauth_states")
 
+class MagicToken(Base):
+    __tablename__ = "magic_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_email = Column(String, index=True)
+    token = Column(String, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class AlertSetting(Base):
     __tablename__ = "alert_settings"
     
