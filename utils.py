@@ -24,6 +24,7 @@ else:
 
 # Get Frontend URL from environment
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+logger.info(f"Frontend URL configured as: {FRONTEND_URL}")
 
 def get_db_session():
     """Dependency to get DB session for background tasks."""
