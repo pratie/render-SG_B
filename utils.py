@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
+    logger.info(f"Resend API key loaded: {RESEND_API_KEY[:10]}...{RESEND_API_KEY[-4:]}")
+else:
+    logger.error("RESEND_API_KEY environment variable not found")
 
 # Get Frontend URL from environment
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
