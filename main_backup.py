@@ -1,40 +1,67 @@
 # main.py
-from fastapi import FastAPI, Depends, HTTPException, Body
+import logging
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI, Depends, HTTPException, Body, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
 from datetime import datetime, timezone
 import json
+import psycopg2
 import os
 import anthropic
-import logging
+from openai import OpenAI
 from typing import List, Optional
 import asyncio
 import asyncpraw
 import asyncprawcore
 import prawcore
 import praw
+import re
 from dotenv import load_dotenv
 import time
 from tenacity import retry, stop_after_attempt, wait_exponential
 import certifi
 import ssl
 import aiohttp
+import random
+from fastapi.staticfiles import StaticFiles
 
-from database import get_db
-from crud import UserCRUD, BrandCRUD, RedditMentionCRUD
+import logging
+
+from fastapi.responses import JSONResponse
+from rate_limiter import limiter, rate_limit_exceeded_handler, get_analysis_rate_limit
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from database import get_db, init_db
+from crud import UserCRUD, BrandCRUD, RedditMentionCRUD, RedditCommentCRUD
 from models import (
-    User, Brand, RedditMention, UserBase, UserCreate, UserResponse,
+    User, Brand, RedditMention, RedditComment, RedditToken, UserBase, UserCreate, UserResponse,
     BrandInput, BrandResponse, AnalysisInput, AnalysisResponse,
-    KeywordResponse, RedditMentionResponse
+    KeywordResponse, RedditMentionResponse, CommentInput, CommentResponse,
+    PostCommentInput, PostCommentResponse, PostSearchResult, UserPreferences, AlertSetting
 )
 from auth.router import router as auth_router, get_current_user
+from auth.reddit_oauth import router as reddit_oauth_router, get_reddit_token
 from routers.payment import router as payment_router
+from routers.preferences import router as preferences_router
+from routers.alerts import router as alerts_router
 
 # Load environment variables
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -53,20 +80,37 @@ app = FastAPI(
         {
             "name": "brands",
             "description": "Brand management operations"
+        },
+        {
+            "name": "reddit",
+            "description": "Reddit interaction operations"
         }
     ]
 )
 
 # Add security scheme for Swagger UI
 
+# Add rate limiter middleware
+# Add rate limiter to app
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Add your frontend URL
+    allow_origins=["https://vercel-f-tau.vercel.app","https://www.sneakyguy.com","http://localhost:3000"],  # Production frontend URLs
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize database on startup
+
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    logging.info("Database initialized") # Use your existing logger if preferred
 
 @app.get(
     "/projects/", 
@@ -77,7 +121,7 @@ app.add_middleware(
 )
 async def get_user_brands(
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 80,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -90,16 +134,20 @@ async def get_user_brands(
         raise HTTPException(status_code=500, detail=str(e))
 # Include auth router
 app.include_router(auth_router)
+app.include_router(reddit_oauth_router)
 app.include_router(payment_router)
+app.include_router(preferences_router)
+app.include_router(alerts_router)
 
 # Initialize clients
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Initialize Reddit client
 reddit_config = {
     "client_id": os.getenv("REDDIT_CLIENT_ID"),
     "client_secret": os.getenv("REDDIT_CLIENT_SECRET"),
-    "user_agent": "RedditAnalyzer/1.0"
+    "user_agent": "apptest"
 }
 
 # Utility functions
@@ -126,9 +174,14 @@ async def verify_subreddit(subreddit_name: str) -> bool:
 def get_keywords(brand_name: str, description: str) -> list[str]:
     """Generate 5-10 relevant keywords for finding Reddit posts"""
     try:
-        prompt = f"""Given a brand/project named '{brand_name}' with description '{description}', 
-        suggest 5-10 relevant keywords for finding related discussions. Return only the keywords, 
-        one per line, without any additional text."""
+        prompt = f"""Act as a senior SEO specialist and Reddit community analyst. Given a brand/project name: '{brand_name}' with description '{description}', 
+suggest 10-15 relevant keywords for finding related discussions. Each keyword should consist of TWO WORDS ONLY (not longer phrases or single words).
+
+Return only the keywords, one per line, without any additional text.
+        
+Avoid very generic keywords like 'ai technology', 'saas platform', etc.
+NOTE: Please avoid "-" (hyphens) in keywords
+"""
         
         response = anthropic_client.messages.create(
             model="claude-3-opus-20240229",
@@ -212,96 +265,151 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
     wait=wait_exponential(multiplier=1, min=4, max=10)
 )
 
-async def generate_comment(post_title: str, post_content: str, brand_id: int, db: Session) -> tuple[str, int]:
-    """Generate AI response with retry logic"""
-    brand_name = db.query(Brand).filter(Brand.id == brand_id).first().name
+
+async def generate_custom_comment(
+    post_title: str,
+    post_content: str,
+    brand_id: int,
+    db: Session,
+    user_email: str = None
+) -> str:
+    """Generate custom AI response with natural brand incorporation"""
+    logging.info(f"Starting comment generation for brand_id: {brand_id}")
+    logging.info(f"Post title: {post_title}")
+    
     try:
-        system_message=f"""
-        You are a long-time Reddit user who genuinely loves trying and discussing different uses of products and services for the brand:{brand_name}.
-        You have personally used and had a great experience with the product/service : {brand_name} and have been mentioned in the knowledge base.
-        However, you're not overly enthusiastic or sales-like - you're just a real person who wants to share their honest experience. reply should be short and subtle.
-
-        Key personality traits:
-        - You're casual and use informal language
-        - You relate to others' problems/needs because you've been there
-        - You share specific, believable details about your experience
-        - You acknowledge both pros and cons, but mainly focus on benefits that helped you
-        - You never directly tell people to buy something
-        - You use phrases like "i found", "worked for me", "in my experience", "might help"
-
-        Communication style:
-        - Write in lowercase to match reddit's casual style
-        - Use natural punctuation and occasional typos
-        - Include relevant personal anecdotes
-        - Reference specific features you've used
-        - Stay humble and helpful, not promotional
-        - Respond contextually to the specific post content
-        - Use conversational fillers like "tbh", "actually", "basically"
-
-        Important rules:
-        1. Never identify as a marketer or brand representative
-        2. Don't use marketing language or seem overly enthusiastic
-        3. Don't make claims that aren't supported by the knowledge base
-        4. Always maintain authenticity in tone and content
-        5. Share personal experience that relates to the post topic
-        6. Be helpful first, with product mention feeling natural
-        7. Match the original post's level of technical knowledge
-
-        Your goal is to be perceived as a genuine community member who happens to have relevant experience with the product/service, not someone trying to promote it.
-
-        INSTRUCTIONS:
-                1. First, analyze how relevant this post is to our brand's mv: rename /Users/prathapreddy/Desktop/reddit_tracker_saas/redditanalysisUI-newUI/src/app/* to /Users/prathapreddy/Desktop/reddit_tracker_saas/redditanalysisUI-newUI/app/*: No such file or directory
-                knowledge base and give it a relevance score from 1-100.
-                2. Then, write a comment in ONLY lower case letters to the Reddit post in a Subtle manner that it should sound like a promotion.
-
-                Return your response in this exact format:
-                SCORE: [your score]
-                COMMENT: [your comment]
-                """
-
+        # Get brand information from database
         brand = db.query(Brand).filter(Brand.id == brand_id).first()
         if not brand:
+            logging.error(f"Brand not found: {brand_id}")
             raise ValueError(f"Brand with id {brand_id} not found")
-            
-        knowledge_base = brand.description
+        
+        brand_name = brand.name
+        brand_description = brand.description
+        
+        logging.info(f"Found brand: {brand_name}")
+
+        # Get user preferences if available
+        user_prefs = None
+        if user_email:
+            user_prefs = db.query(UserPreferences).filter(
+                UserPreferences.user_email == user_email
+            ).first()
+
+        # Define system message based on user preferences
+#         system_message = """
+# You are an expert Reddit user who knows how to engage with people in reddit discussions naturally and authentically.
+# Your responses should be helpful, conversational, and never end with generic questions like "let me know if you have questions" or "hope this helps".
+# """
 
         prompt = f"""
-        CONTEXT:
-        Knowledge Base (information about our product/service):
-        {knowledge_base}
+You're browsing Reddit and see this post. Write a natural comment that's actually helpful.
 
-        TASK:
-        Post Title: {post_title}
-        Post Content: {post_content}
-        """
+"{post_title}"
+{post_content}
 
-        #print("prompt------","\n",prompt)
+You know about {brand_name} ({brand_description}).
+Be casual, direct, helpful. Maybe throw in some personality if it fits. Don't sound like customer service.
+1. Write in a clear, respectful, and non-promotional tone:
+   - Be helpful first, never salesy
+   - Use concise, plain language with minimal jargon
+   - Avoid overexplaining or “trying to sell” anything
 
-        response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            temperature=0.7,
-            system=system_message,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+2. Acknowledge the user’s post genuinely:
+   - Recognize their question, challenge, or frustration
+   - Share a quick insight, tip, or idea that could help
+
+3. Mention the brand only if directly relevant:
+   - Mention {brand_name} only when it clearly fits the context
+   - Never say “I’ve found,” “I’ve been using,” or any “I’ve” phrases
+   - Briefly state how it solves the problem or what it’s good at
+   - Place the mention toward the end, subtly and casually
+   - Sound like someone who’s seen it work, not a promoter
+
+4. Authenticity is key:
+   - Write like a knowledgeable person on Reddit, not a bot or ad
+   - 1–2 short paragraphs max, with natural flow and some imperfection
+   - No greetings or sign-offs
+   - End with a confident, neutral tone — like “take it or leave it”
+
+5. Avoid red flags:
+   - No buzzwords, no excessive punctuation
+   - No rigid structures or lists
+   - No AI-sounding phrasing
+   - No greetings like “hey,” “hi,” or “hello”
+If {brand_name} fits naturally into your response, mention it casually. If not, don't force it. Just be a normal redditor sharing what you know.
+"""
+
+        if user_prefs:
+            # Add tone customization based on user preferences
+            if user_prefs.tone == 'friendly':
+                prompt += "\n<tone>friendly</tone>"
+            elif user_prefs.tone == 'professional':
+                prompt += "\n<tone>professional</tone>"
+            elif user_prefs.tone == 'technical':
+                prompt += "\n<tone>technical</tone>"
+            
+            # Add any custom response style from user preferences
+            if user_prefs.response_style:
+                prompt += f"\n<custom_style>{user_prefs.response_style}</custom_style>"
+
+        # Removed XML instructions for more natural output
+
+        # Comment out Claude API call for testing
+        # response = anthropic_client.messages.create(
+        #     model="claude-3-haiku-20240307",
+        #     max_tokens=254,
+        #     temperature=0.99,
+        #     messages=[{"role": "user", "content": prompt}]
+        # )
+
+        # GPT-4.1 API call
+        response = openai_client.responses.create(
+            model="gpt-4.1",
+            input=prompt
         )
 
-        response_text = response.content[0].text
+        print("\n")
+        print("PROMPT:------------------------------------", prompt)
         
-        # Extract score and comment
-        score_line = response_text.split('\n')[0]
-        score = int(''.join(filter(str.isdigit, score_line)))
+        logging.info("Received response from OpenAI GPT-4.1 API")
         
-        comment = '\n'.join(response_text.split('\n')[1:]).strip()
-        if comment.upper().startswith('COMMENT:'):
-            comment = comment[8:].strip()
+        # Handle empty responses
+        if not response or not response.output_text:
+            logging.error("Empty response from OpenAI API")
+            return "Sorry, I couldn't generate a response at this time."
             
-        return comment, score
+        # Extract the comment from response
+        comment = response.output_text.strip()
+        
+        # Extract content between response tags if present
+        if "<response>" in comment:
+            comment = comment.split("<response>")[1].split("</response>")[0].strip()
+        
+        # Basic cleanup and formatting
+        comment = comment.replace("Hey there, ", "").replace("Hi there, ", "").strip()
+        comment = comment.replace("-", " ").replace(":", "").replace("  ", "").strip()
+        comment = comment.replace("  ", " ").replace("  ", " ").replace("That's a great question!", "").replace("Hey there!", "")
+        
+        # Ensure proper capitalization of brand name
+        if brand_name:
+            comment = re.sub(
+                rf'\b{re.escape(brand_name.lower())}\b',
+                brand_name,
+                comment,
+                flags=re.IGNORECASE
+            )
+        
+        logging.info(f"Generated comment: {comment}")
+        logging.info(f"Comment length: {len(comment)}")
+        
+        return comment
         
     except Exception as e:
-        logging.error(f"Error generating comment: {str(e)}")
-        return "i've had some experience with this. while every situation is different, you might want to check out some alternative solutions that could help.", 50
+        logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
+        if "openai" in str(e).lower():
+            return "Sorry, I'm having trouble with the AI service right now."
+        return "Sorry, I'm having trouble generating a response right now."
 def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
     """Generate relevance score between post and brand"""
     try:
@@ -310,7 +418,15 @@ def generate_relevance_score(post_title: str, post_content: str, brand_id: int, 
             raise ValueError(f"Brand with id {brand_id} not found")
 
         system_message = """
-        You are an expert content analyzer specializing in determining relevance between social media posts and brand offerings. Your task is to analyze the similarity between a given post and a brand's offering, providing a relevance score from 20-100.
+        You are an expert Reddit post analyzer specializing in determining relevance between social media posts and brand offerings.
+        Your task is to analyze the similarity between a given Reddit post and a brand’s offering.
+
+        Return your answer strictly in this JSON format:
+        {
+          "relevance_score": [20-100],
+          "explanation": "[2-3 sentence explanation of the score]",
+          "intent": "[purchase_intent | solution_seeking | recommendation_request | comparison | complaint | feature_request | product_feedback | general_interest | unaware_prospect | other]"
+        }
 
         Scoring Guide:
         - 90-100: Exceptional match (direct need-solution fit)
@@ -319,47 +435,61 @@ def generate_relevance_score(post_title: str, post_content: str, brand_id: int, 
         - 35-49: Basic match (some relevant elements)
         - 20-34: Minimal match (few overlapping elements)
 
-        Your output must be in this exact format:
-        Relevance Score: [20-100]
-        Explanation: [2-3 sentences explaining the score]
+        Example Output:
+        {
+          "relevance_score": 85,
+          "explanation": "The post discusses pain points that align closely with the brand's core offerings, suggesting strong potential interest. Minor mismatch in use case keeps it from scoring higher.",
+          "intent": "solution_seeking"
+        }
         """
 
         prompt = f"""
-        Analyze the relevance between this post and brand:
+        Analyze the relevance between this Reddit post and the brand.
 
         Post Title: {post_title}
         Post Content: {post_content}
+
         Brand Name: {brand.name}
         Brand Description: {brand.description}
         """
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=1000,
-            temperature=0.1,
+            max_tokens=300,
+            temperature=0.3,
             system=system_message,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=[{"role": "user", "content": prompt}]
         )
 
-        response_text = response.content[0].text
-        
-        # Extract just the score
-        score_line = response_text.split('\n')[0]
-        score = int(''.join(filter(str.isdigit, score_line)))
-        
-        # Ensure score is within 20-100 range
-        return max(20, min(100, score))
+        raw_output = response.content[0].text.strip()
+        print("Raw Claude Output:", raw_output)
 
+        try:
+            parsed = json.loads(raw_output)
+            score = parsed.get("relevance_score", 20)
+            explanation = parsed.get("explanation", "")
+            intent = parsed.get("intent", "other")
+        except json.JSONDecodeError:
+            print("Failed to parse Claude response as JSON.")
+            return 20, "Failed to parse response", "other"
+
+        score = max(20, min(100, int(score)))
+        print(f"Post Title: {post_title}\nScore: {score}\nExplanation: {explanation}\nIntent: {intent}")
+        return score, explanation, intent
+
+    except Exception as e:
+        print(f"Error generating relevance score: {e}")
+        return 20, "Error during scoring", "other"
     except Exception as e:
         logging.error(f"Error generating relevance score: {str(e)}")
         # Return a default score in case of error
         return 20
 
 @app.post("/analyze/initial", response_model=KeywordResponse, tags=["analysis"])
+@get_analysis_rate_limit() 
 async def get_initial_analysis(
     brand_input: BrandInput,
+    request: Request,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -378,164 +508,286 @@ async def get_initial_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+from typing import Tuple, List, Dict
+
+async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[List[Dict], int, int]:
+    """
+    Core logic to analyze Reddit posts for a given brand.
+    Fetches posts, matches keywords, saves/updates mentions, and updates brand timestamps.
+    Returns a list of all mention data for the brand, new mentions count, and updated mentions count.
+    """
+    brand = db.query(Brand).filter(Brand.id == brand_id).first()
+    if not brand:
+        logger.error(f"_perform_brand_reddit_analysis: Brand with ID {brand_id} not found.")
+        return [], 0, 0 
+            
+    try:
+        current_keywords = json.loads(brand.keywords)
+        current_subreddits = json.loads(brand.subreddits)
+    except json.JSONDecodeError:
+        logger.error(f"_perform_brand_reddit_analysis: Invalid keywords or subreddits format for brand {brand_id}.")
+        return [], 0, 0
+
+    existing_mentions_db = {m.url: m for m in db.query(RedditMention).filter(RedditMention.brand_id == brand.id).all()}
+    subreddit_last_analyzed = brand.subreddit_last_analyzed_dict
+    
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    processed_urls_in_session = set()
+    
+    new_mentions_count = 0
+    updated_mentions_count = 0
+    
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
+        reddit = asyncpraw.Reddit(
+            **reddit_config, 
+            requestor_class=asyncprawcore.Requestor,
+            requestor_kwargs={"session": session}
+        )
+
+        for subreddit_name in current_subreddits:
+            posts_iterator = None
+            is_initial_scan_for_subreddit = False
+            try:
+                clean_subreddit_name = subreddit_name.replace('r/', '')
+                last_analyzed_ts = subreddit_last_analyzed.get(clean_subreddit_name, 0)
+                last_analyzed_str = datetime.utcfromtimestamp(last_analyzed_ts).strftime('%Y-%m-%d %H:%M:%S UTC') if last_analyzed_ts else 'Never'
+                
+                logger.info("\n=== Analyzing r/%s for Brand ID %s ===", clean_subreddit_name, brand_id)
+                logger.info("Last analyzed: %s", last_analyzed_str)
+
+                try:
+                    subreddit_obj = await reddit.subreddit(clean_subreddit_name)
+                except Exception as e:
+                    logging.error(f"Error accessing subreddit r/{clean_subreddit_name} for Brand ID {brand_id}: {str(e)}")
+                    continue
+
+                if last_analyzed_ts == 0:
+                    is_initial_scan_for_subreddit = True
+                    effective_limit =  70
+                    effective_time_period = "month"
+                    logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
+                    posts_iterator = subreddit_obj.top(time_filter=effective_time_period, limit=effective_limit)
+                else: 
+                    is_initial_scan_for_subreddit = False
+                    effective_limit = 300
+                    logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
+                    posts_iterator = subreddit_obj.new(limit=effective_limit)
+                
+                processed_count_in_subreddit = 0
+                async for post in posts_iterator:
+                    processed_count_in_subreddit += 1
+                    if not is_initial_scan_for_subreddit and post.created_utc <= last_analyzed_ts:
+                        logger.info(f"Stopping at post older than last analysis for r/{clean_subreddit_name}: '{post.title}'")
+                        break
+
+                    post_url = f"https://reddit.com{post.permalink}"
+                    if post_url in processed_urls_in_session:
+                        continue
+                    processed_urls_in_session.add(post_url)
+                    
+                    post_text = f"{post.title} {post.selftext if post.selftext else ''}".lower()
+                    matching_keywords = [kw for kw in current_keywords if kw.lower() in post_text]
+                    
+                    if matching_keywords:
+                        existing_mention_from_db = existing_mentions_db.get(post_url)
+                        
+                        # For existing posts, only update dynamic fields
+                        if existing_mention_from_db:
+                            changed = False
+                            if existing_mention_from_db.num_comments != post.num_comments:
+                                existing_mention_from_db.num_comments = post.num_comments
+                                changed = True
+                            if changed:
+                                db.commit()
+                                updated_mentions_count += 1
+                            continue  # Skip to next post as we've updated what we needed
+                            
+                        # For new posts, calculate all fields including relevance score and intent
+                        relevance_score, explanation_line, intent_line = generate_relevance_score(post.title, post.selftext, brand_id, db)
+                        suggested_comment = explanation_line
+                        intent = intent_line
+
+
+                        # Create new mention
+                        new_mention = RedditMention(
+                            brand_id=brand.id,
+                            title=post.title,
+                            content=post.selftext if post.selftext else "",
+                            url=post_url,
+                            subreddit=clean_subreddit_name,
+                            keyword=matching_keywords[0] if matching_keywords else "",
+                            matching_keywords=json.dumps(matching_keywords),
+                            score=post.score,
+                            num_comments=post.num_comments,
+                            relevance_score=relevance_score,
+                            suggested_comment=suggested_comment,
+                            intent=intent,
+                            created_utc=int(post.created_utc)
+                        )
+                        db.add(new_mention)
+                        new_mentions_count += 1
+                        logger.info(f"Added new mention for Brand ID {brand_id}, Post: {post.title[:50]}... URL: {post_url}")
+                
+                if processed_count_in_subreddit > 0 or is_initial_scan_for_subreddit:
+                    subreddit_last_analyzed[clean_subreddit_name] = int(datetime.utcnow().timestamp())
+                logger.info(f"Finished r/{clean_subreddit_name} for Brand ID {brand_id}, processed {processed_count_in_subreddit} posts from API call.")
+
+            except Exception as e:
+                logging.error(f"Error processing subreddit {subreddit_name} for Brand ID {brand_id}: {str(e)}", exc_info=True)
+                continue
+
+        await reddit.close()
+        
+        current_time_utc = datetime.utcnow()
+        brand.subreddit_last_analyzed = json.dumps(subreddit_last_analyzed)
+        brand.last_analyzed = current_time_utc
+        db.commit()
+        
+        logger.info("\n=== Analysis Summary for Brand ID %s ===", brand_id)
+        logger.info("Analysis completed at: %s", current_time_utc.strftime('%Y-%m-%d %H:%M:%S UTC'))
+        logger.info("New mentions found: %s", new_mentions_count)
+        logger.info("Existing mentions updated: %s", updated_mentions_count)
+        logger.info("Subreddit analysis timestamps updated as follows:")
+        for sub_name, ts in subreddit_last_analyzed.items():
+            last_analyzed_dt = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
+            logger.info("  - r/%s: Last analysis timestamp set to %s", sub_name, last_analyzed_dt)
+        logger.info("======================\n")
+
+        all_mentions_from_db = db.query(RedditMention).filter(RedditMention.brand_id == brand.id).order_by(RedditMention.created_utc.desc()).all()
+        
+        comprehensive_mentions_list_for_response = []
+        for mention_orm_object in all_mentions_from_db:
+            mention_pydantic_object = RedditMentionResponse.from_orm(mention_orm_object)
+            comprehensive_mentions_list_for_response.append(mention_pydantic_object.dict())
+
+        return comprehensive_mentions_list_for_response, new_mentions_count, updated_mentions_count
+
 @app.post("/analyze/reddit", response_model=AnalysisResponse, tags=["analysis"])
+@get_analysis_rate_limit() 
 async def analyze_reddit_content(
     analysis_input: AnalysisInput,
+    request: Request,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Analyze Reddit posts based on approved keywords and subreddits.
+    Uses incremental analysis: broader search for initial scan, .new() for updates.
     Requires authentication.
+    Triggers core analysis logic and returns results.
     """
     try:
-        # Verify brand ownership and get latest data
-        brand = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
-        if not brand:
+        brand_check = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
+        if not brand_check:
             raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
-            
-        # Refresh brand data to ensure we have the latest keywords and subreddits
-        brand = db.query(Brand).filter(Brand.id == analysis_input.brand_id).first()
-        if not brand:
-            raise HTTPException(status_code=404, detail="Brand not found")
-            
-        # Parse the latest keywords and subreddits from the brand
-        try:
-            current_keywords = json.loads(brand.keywords)
-            current_subreddits = json.loads(brand.subreddits)
-            
-            # Update the analysis input with latest data
-            analysis_input.keywords = current_keywords
-            analysis_input.subreddits = current_subreddits
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="Invalid keywords or subreddits format in database")
 
-        # Clear existing mentions for this brand before adding new ones
-        try:
-            db.query(RedditMention).filter(RedditMention.brand_id == brand.id).delete()
-            db.commit()
-            logging.info(f"Cleared existing mentions for brand {brand.id}")
-        except Exception as e:
-            db.rollback()
-            logging.error(f"Error clearing existing mentions: {str(e)}")
-            raise HTTPException(status_code=500, detail="Failed to clear existing mentions")
+        comprehensive_mentions_list, new_mentions_found, updated_mentions_found = await _perform_brand_reddit_analysis(
+            brand_id=analysis_input.brand_id, 
+            db=db
+        )
+        
+        logger.info(f"Endpoint analyze_reddit_content for Brand ID {analysis_input.brand_id} completed. "
+                    f"New: {new_mentions_found}, Updated: {updated_mentions_found}.")
 
-        # Initialize Reddit client with async support
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
-            reddit = asyncpraw.Reddit(
-                **reddit_config,
-                requestor_class=asyncprawcore.Requestor,
-                requestor_kwargs={"session": session}
-            )
+        return AnalysisResponse(
+            status="success",
+            posts=comprehensive_mentions_list,
+            matching_posts=comprehensive_mentions_list
+        )
 
-            matching_posts = []
-            for subreddit_name in analysis_input.subreddits:
-                try:
-                    # Clean up subreddit name by removing 'r/' prefix if present
-                    clean_subreddit_name = subreddit_name.replace('r/', '')
-                    
-                    # Try to access the subreddit
-                    try:
-                        subreddit = await reddit.subreddit(clean_subreddit_name)
-                        # Verify the subreddit exists by trying to access its properties
-                        await subreddit.load()
-                    except (asyncprawcore.exceptions.NotFound, asyncprawcore.exceptions.Redirect):
-                        logging.error(f"Subreddit {clean_subreddit_name} not found")
-                        continue
-                    except asyncprawcore.exceptions.Forbidden:
-                        logging.error(f"Access to subreddit {clean_subreddit_name} is forbidden")
-                        continue
-                    except Exception as e:
-                        logging.error(f"Error accessing subreddit {clean_subreddit_name}: {str(e)}")
-                        continue
-                    
-                    # Get posts from the subreddit based on time period
-                    try:
-                        # Default to month if time_period is not specified
-                        time_period = analysis_input.time_period or "month"
-                        posts = subreddit.top(time_period, limit=analysis_input.limit)
-                    except Exception as e:
-                        logging.error(f"Error fetching posts from {clean_subreddit_name}: {str(e)}")
-                        continue
-                    
-                    # Check each post for keyword matches
-                    async for post in posts:
-                        post_text = f"{post.title} {post.selftext}".lower()
-                        matching_keywords = [
-                            keyword for keyword in analysis_input.keywords 
-                            if keyword.lower() in post_text
-                        ]
-                        
-                        if matching_keywords:
-                            # Generate AI suggested comment and relevance score
-                            #test_comment, relevance_score = await generate_comment(post.title, post.selftext, brand.id, db)
-                            relevance_score= generate_relevance_score(post.title, post.selftext, brand.id, db)
-                            print("\n relavence score>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>:\n\n",relevance_score)
-                            suggested_comment = "This feature will be live soon! Stay tuned!😊"
-                            
-                            post_data = {
-                                "title": post.title,
-                                "content": post.selftext[:5000],  # Limit content length
-                                "url": f"https://reddit.com{post.permalink}",
-                                "subreddit": clean_subreddit_name,
-                                "created_utc": post.created_utc,
-                                "score": post.score,
-                                "num_comments": post.num_comments,
-                                "relevance_score": relevance_score,
-                                "suggested_comment": suggested_comment,
-                                "matched_keywords": matching_keywords
-                            }
-                            matching_posts.append(post_data)
-
-                            # Store the mention in the database
-                            mention = RedditMention(
-                                brand_id=brand.id,
-                                title=post.title,
-                                content=post.selftext[:500],  # Limit content length
-                                url=f"https://reddit.com{post.permalink}",
-                                subreddit=clean_subreddit_name,
-                                keyword=matching_keywords[0],  # Primary matching keyword
-                                matching_keywords_list=matching_keywords,  # All matching keywords
-                                score=post.score,
-                                num_comments=post.num_comments,
-                                relevance_score=relevance_score,
-                                suggested_comment=suggested_comment,
-                                created_utc=int(post.created_utc)
-                            )
-                            try:
-                                logging.info(f"Saving mention for brand {brand.id}: {post.title}")
-                                RedditMentionCRUD.create_mention(db, mention)
-                                logging.info(f"Successfully saved mention for brand {brand.id}")
-                            except Exception as e:
-                                logging.error(f"Error saving mention: {str(e)}")
-                                continue
-
-                except Exception as e:
-                    logging.error(f"Error processing subreddit {subreddit_name}: {str(e)}")
-                    continue
-
-            # Close the Reddit client
-            await reddit.close()
-
-            # Sort posts by relevance score
-            matching_posts.sort(key=lambda x: x["relevance_score"], reverse=True)
-
-            # Update brand's last_analyzed timestamp
-            brand.last_analyzed = datetime.utcnow()
-            db.commit()
-
-            return AnalysisResponse(
-                status="success",
-                posts=matching_posts,
-                matching_posts=matching_posts
-            )
-
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        logging.error(f"Error analyzing Reddit content: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in analyze_reddit_content endpoint for Brand ID {analysis_input.brand_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+        
+    try:
+        with conn.cursor() as cur:
+            # Check if the table exists
+            cur.execute(
+                f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{table}')"
+            )
+            if not cur.fetchone()[0]:
+                logging.error(f"Table '{table}' does not exist")
+                return []
+            
+            # Determine which fields to search based on the table
+            if table == 'submissions':
+                search_fields = ['title', 'selftext']
+                display_fields = [
+                    'id', 'author', 'title', 'selftext', 'score', 
+                    'created_utc', 'subreddit', 'num_comments', 'permalink'
+                ]
+            else:  # comments
+                search_fields = ['body']
+                display_fields = [
+                    'id', 'author', 'body', 'score', 'created_utc', 'subreddit', 'link_id'
+                ]
+            
+            # Handle keywords list properly
+            if isinstance(keywords, str):
+                keyword_list = [k.strip() for k in keywords.split(',')]
+            elif isinstance(keywords, list):
+                keyword_list = keywords
+            else:
+                keyword_list = list(keywords)
+            
+            # Build the WHERE clause to match any of the keywords
+            keyword_conditions = []
+            params = []
+            for keyword in keyword_list:
+                field_conditions = []
+                for field in search_fields:
+                    field_conditions.append(f"{field} ILIKE %s")
+                    params.append(f"%{keyword}%")
+                # Each keyword can match in any field
+                keyword_conditions.append(f"({' OR '.join(field_conditions)})")
+            
+            # Join all keyword conditions with OR to capture any match
+            where_clause = ' OR '.join(keyword_conditions)
+            
+            # Add subreddit filter if specified
+            if subreddit:
+                where_clause = f"({where_clause}) AND subreddit = %s"
+                params.append(subreddit)
+            
+            sql_query = f"""
+                SELECT {', '.join(display_fields)}
+                FROM {table}
+                WHERE {where_clause}
+                ORDER BY score DESC
+                LIMIT %s OFFSET %s
+            """
+            params.extend([limit, offset])
+            
+            logging.info(f"Executing SQL: {sql_query} with params: {params}")
+            cur.execute(sql_query, params)
+            results = cur.fetchall()
+            logging.info(f"Found {len(results)} results from database")
+            
+            # Convert results to a list of dictionaries
+            posts = []
+            for result in results:
+                post = {}
+                for i, field in enumerate(display_fields):
+                    post[field] = result[i]
+                posts.append(post)
+            
+            return posts
+    except Exception as e:
+        logging.error(f"Error searching keywords: {e}")
+        return []
+    finally:
+        conn.close()
 
-@app.put("/projects/{brand_id}", response_model=BrandResponse, tags=["brands"])
+
+@app.put(
+    "/projects/{brand_id}", 
+    response_model=BrandResponse,
+    tags=["brands"],
+    summary="Update a project",
+    description="Update a project"
+)
 async def update_brand(
     brand_id: int,
     brand_input: BrandInput,
@@ -716,7 +968,7 @@ async def update_brand_subreddits(
 async def get_brand_mentions(
     brand_id: int,
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 5000,
     current_user_email: str = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -727,7 +979,7 @@ async def get_brand_mentions(
     
     try:
         mentions = RedditMentionCRUD.get_brand_mentions(db, brand_id, skip=skip, limit=limit)
-        logging.info(f"Retrieved mentions: {[vars(m) for m in mentions]}")
+        #logging.info(f"Retrieved mentions: {[vars(m) for m in mentions]}")
         
         # Convert each mention to a dict and validate required fields
         mention_dicts = []
@@ -745,6 +997,7 @@ async def get_brand_mentions(
                 "score": mention.score or 0,
                 "num_comments": mention.num_comments or 0,
                 "relevance_score": mention.relevance_score or 0,
+                "intent": mention.intent or "",
                 "suggested_comment": mention.suggested_comment or "",
                 "created_at": mention.created_at or datetime.utcnow(),
                 "created_utc": mention.created_utc or int(datetime.utcnow().timestamp()),
@@ -752,12 +1005,343 @@ async def get_brand_mentions(
             }
             mention_dicts.append(mention_dict)
         
-        logging.info(f"Converted mentions: {mention_dicts}")
+        #logging.info(f"Converted mentions: {mention_dicts}")
         return [RedditMentionResponse(**m) for m in mention_dicts]
     except Exception as e:
         logging.error(f"Error getting mentions: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class RedditCommentError(Exception):
+    """Custom exception for Reddit comment errors"""
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
+@app.post("/api/reddit/comment/", response_model=PostCommentResponse, tags=["reddit"])
+async def post_reddit_comment(
+    comment_input: PostCommentInput,
+    request: Request,
+    current_user_email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Post a comment to Reddit.
+    Requires authentication and proper Reddit API credentials.
+    Rate limited to 5 comments per user per 24 hours.
+    """
+    logging.info(f"Starting comment posting request from user: {current_user_email}")
+
+    print('post comment input*50', comment_input)
+    
+    try:
+        # Check rate limit
+        logging.info(f"Checking rate limit for user: {current_user_email}")
+        comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user_email)
+        logging.info(f"Current comment count for user {current_user_email}: {comment_count}/5")
+        
+        if comment_count >= 10:  
+            logging.warning(f"Rate limit exceeded for user {current_user_email}. Count: {comment_count}")
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. You can only post 5 comments per 24 hours."
+            )
+
+        # Verify brand ownership
+        logging.info(f"Verifying brand ownership for brand_id: {comment_input.brand_id}")
+        brand = BrandCRUD.get_brand(db, comment_input.brand_id, current_user_email)
+        if not brand:
+            raise HTTPException(
+                status_code=404,
+                detail="Brand not found or unauthorized access"
+            )
+        
+        # Extract post ID from URL
+        match = re.search(r'comments/([a-z0-9]+)/', comment_input.post_url, re.I)
+        if not match:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Reddit post URL"
+            )
+        
+        post_id = match.group(1)
+        
+        # Check if we've already commented on this post
+        existing_comment = db.query(RedditComment).filter(
+            RedditComment.brand_id == comment_input.brand_id,
+            RedditComment.post_id == post_id
+        ).first()
+        
+        if existing_comment:
+            return PostCommentResponse(
+                comment=existing_comment.comment_text,
+                comment_url=existing_comment.comment_url,
+                status="already_exists"
+            )
+
+        # Get Reddit token
+        token = await get_reddit_token(db, current_user_email)
+        if not token:
+            raise HTTPException(
+                status_code=401,
+                detail="Reddit authentication required. Please connect your Reddit account first."
+            )
+
+        # Generate AI comment
+        # comment = await generate_custom_comment(
+        #     post_title=comment_input.post_title,
+        #     post_content=comment_input.post_content,
+        #     brand_id=comment_input.brand_id,
+        #     db=db,
+        #     user_email=current_user_email
+        # )
+        # instead of generating comment we want to use the one that coming from the api call, we comment text option 
+        comment = comment_input.comment_text
+
+        # Run the Reddit operations in a thread pool
+        def post_to_reddit():
+            try:
+                logging.info("Initializing Reddit client...")
+                reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
+                reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+                reddit_user_agent = os.getenv("REDDIT_USER_AGENT", "python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)")
+
+                # Initialize Reddit client with OAuth token
+                reddit = praw.Reddit(
+                    client_id=reddit_client_id,
+                    client_secret=reddit_client_secret,
+                    user_agent=reddit_user_agent,
+                    refresh_token=token.refresh_token
+                )
+
+                # Verify authentication
+                try:
+                    logging.info("Verifying Reddit authentication...")
+                    reddit_user = reddit.user.me()
+                    logging.info(f"Reddit authentication successful as user: {reddit_user.name}")
+                except Exception as auth_error:
+                    logging.error(f"Reddit authentication verification failed: {str(auth_error)}")
+                    raise
+
+                logging.info(f"Fetching submission with ID: {post_id}")
+                submission = reddit.submission(id=post_id)
+                
+                if not submission:
+                    logging.error("Submission not found")
+                    raise prawcore.exceptions.NotFound("Submission not found")
+                
+                if submission.title != comment_input.post_title:
+                    logging.error(f"Title mismatch. Expected: {comment_input.post_title}, Got: {submission.title}")
+                    raise ValueError("Reddit post title mismatch")
+                
+                logging.info("Posting comment to submission...")
+                return submission.reply(comment)
+                
+            except prawcore.exceptions.OAuthException as oauth_error:
+                logging.error(f"Reddit OAuth error: {str(oauth_error)}")
+                raise
+            except Exception as e:
+                logging.error(f"Error in post_to_reddit: {str(e)}")
+                raise
+
+        try:
+            loop = asyncio.get_event_loop()
+            logging.info("Attempting to post comment to Reddit...")
+            comment = await loop.run_in_executor(None, post_to_reddit)
+            logging.info("Successfully posted comment to Reddit")
+            
+            # Save the comment to our database
+            try:
+                logging.info("Saving comment to database...")
+                reddit_comment = RedditComment(
+                    brand_id=comment_input.brand_id,
+                    post_id=post_id,
+                    post_url=comment_input.post_url,
+                    comment_text=comment_input.comment_text,
+                    comment_url=f"https://reddit.com{comment.permalink}"
+                )
+                db.add(reddit_comment)
+                db.commit()
+                logging.info("Successfully saved comment to database")
+            except Exception as db_error:
+                logging.error(f"Database error while saving comment: {str(db_error)}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to save comment to database: {str(db_error)}"
+                )
+
+            return PostCommentResponse(
+                comment=comment_input.comment_text,
+                comment_url=f"https://reddit.com{comment.permalink}",
+                status="success"
+            )
+
+        except prawcore.exceptions.Forbidden as e:
+            logging.error(f"Reddit authentication error: {str(e)}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"Reddit authentication failed or insufficient permissions: {str(e)}"
+            )
+        except prawcore.exceptions.NotFound as e:
+            logging.error(f"Reddit post not found error: {str(e)}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Reddit post not found: {str(e)}"
+            )
+        except prawcore.exceptions.ServerError as e:
+            logging.error(f"Reddit server error: {str(e)}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Reddit server error: {str(e)}"
+            )
+        except prawcore.exceptions.TooLarge as e:
+            logging.error(f"Comment too long error: {str(e)}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Comment is too long for Reddit: {str(e)}"
+            )
+        except Exception as e:
+            logging.error(f"Unexpected error while posting comment: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to post comment: {str(e)}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Unexpected error in post_reddit_comment: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred"
+        )
+
+@app.post("/generate-comment/", response_model=CommentResponse, tags=["reddit"])
+async def generate_comment_endpoint(
+    comment_input: CommentInput,
+    db: Session = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Generate a custom comment for a Reddit post.
+    Requires authentication.
+    """
+    try:
+        # Generate the comment
+        comment = await generate_custom_comment(
+            post_title=comment_input.post_title,
+            post_content=comment_input.post_content,
+            brand_id=comment_input.brand_id,
+            db=db,
+            user_email=current_user  # current_user is already the email string
+        )
+        
+        return {"comment": comment}
+    except Exception as e:
+        logging.error(f"Error in generate_comment_endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get(
+    "/explore/posts/",
+    response_model=List[PostSearchResult],
+    tags=["reddit"],
+    summary="Explore Reddit Posts",
+    description="Search and explore posts in the database with optimized full-text search capabilities."
+)
+async def explore_posts(
+    query: str = Query(..., description="Search term for post titles"),
+    subreddit: Optional[str] = Query(None, description="Filter by specific subreddit"),
+    limit: int = Query(500, ge=1, le=500, description="Maximum number of results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination")
+):
+    """
+    Explores Reddit submissions using optimized search:
+    - Uses full-text search when available for multi-word queries
+    - Falls back to ILIKE for simple searches
+    - Can filter by subreddit
+    - Returns paginated results sorted by score
+    """
+    conn = connect_to_db()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed")
+    
+    try:
+        with conn.cursor() as cur:
+            # Check if the table exists
+            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'submissions')")
+            if not cur.fetchone()[0]:
+                raise HTTPException(status_code=404, detail="Submissions table does not exist")
+            
+            # Check if we have full text search index
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM pg_indexes 
+                    WHERE tablename = 'submissions'
+                    AND indexdef LIKE '%to_tsvector%title%'
+                )
+            """)
+            has_fts = cur.fetchone()[0]
+            
+            # Define display fields
+            display_fields = ['id', 'author', 'title', 'score', 'created_utc', 'subreddit', 'num_comments', 'permalink']
+            
+            # Build the WHERE clause
+            where_clauses = []
+            params = []
+            
+            # Use full text search if available, otherwise use ILIKE
+            if has_fts and ' ' in query.strip():
+                # Convert query to tsquery format (replace spaces with & for AND search)
+                ts_query = ' & '.join(query.split())
+                where_clauses.append("to_tsvector('english', title) @@ to_tsquery('english', %s)")
+                params.append(ts_query)
+            else:
+                # Fall back to ILIKE for simple searches
+                where_clauses.append("title ILIKE %s")
+                params.append(f"%{query}%")
+            
+            # Add subreddit filter if specified
+            if subreddit:
+                where_clauses.append("subreddit = %s")
+                params.append(subreddit)
+            
+            # Build the final query
+            sql_query = f"""
+                SELECT {', '.join(display_fields)}
+                FROM submissions
+                WHERE {' AND '.join(where_clauses)}
+                ORDER BY score DESC
+                LIMIT %s OFFSET %s
+            """
+            params.extend([limit, offset])
+            
+            cur.execute(sql_query, params)
+            results = cur.fetchall()
+            
+            # Convert to list of dicts and handle datetime conversion
+            posts = []
+            for result in results:
+                post = {}
+                for i, field in enumerate(display_fields):
+                    value = result[i]
+                    # Convert created_utc from Unix timestamp to datetime
+                    if field == 'created_utc' and isinstance(value, (int, float)):
+                        value = datetime.fromtimestamp(value)
+                    post[field] = value
+                posts.append(post)
+            
+            return posts
+
+    except Exception as e:
+        logging.error(f"Error in /explore/posts/ endpoint: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during post exploration"
+        )
+    finally:
+        conn.close()
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "10000"))  # Use PORT from env or default to 10000 for Render
+    uvicorn.run(app, host="0.0.0.0", port=port)

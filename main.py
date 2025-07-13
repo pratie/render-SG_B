@@ -19,6 +19,7 @@ import json
 import psycopg2
 import os
 import anthropic
+from openai import OpenAI
 from typing import List, Optional
 import asyncio
 import asyncpraw
@@ -140,6 +141,7 @@ app.include_router(alerts_router)
 
 # Initialize clients
 anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Initialize Reddit client
 reddit_config = {
@@ -300,91 +302,72 @@ async def generate_custom_comment(
 # Your responses should be helpful, conversational, and never end with generic questions like "let me know if you have questions" or "hope this helps".
 # """
 
-        prompt = f"""
-You are creating a helpful, authentic Reddit comment that provides genuine value while subtly mentioning {brand_name} if appropriate at last. Your goal is to create a comment that gets upvoted because it's genuinely helpful.
+        prompt = f"""You're browsing Reddit and see this post:
 
-<context>
-Post Title: {post_title}
-Post Content: {post_content}
-Brand: {brand_name}
-What They Do: {brand_description}
-</context>
-<reddit_comment_rules>
-1. Write in a clear, respectful, and non-promotional tone:
-   - Be helpful first, never salesy
-   - Use concise, plain language with minimal jargon
-   - Avoid overexplaining or “trying to sell” anything
+"{post_title}"
+{post_content}
 
-2. Acknowledge the user’s post genuinely:
-   - Recognize their question, challenge, or frustration
-   - Share a quick insight, tip, or idea that could help
+You know about {brand_name} ({brand_description}).
 
-3. Mention the brand only if directly relevant:
-   - Mention {brand_name} only when it clearly fits the context
-   - Never say “I’ve found,” “I’ve been using,” or any “I’ve” phrases
-   - Briefly state how it solves the problem or what it’s good at
-   - Place the mention toward the end, subtly and casually
-   - Sound like someone who’s seen it work, not a promoter
+Write a short, natural comment. Keep it 1-2 sentences max. Be casual and direct. No dashes, no fancy punctuation, no long explanations, no corporate speak.
 
-4. Authenticity is key:
-   - Write like a knowledgeable person on Reddit, not a bot or ad
-   - 1–2 short paragraphs max, with natural flow and some imperfection
-   - No greetings or sign-offs
-   - End with a confident, neutral tone — like “take it or leave it”
-
-5. Avoid red flags:
-   - No buzzwords, no excessive punctuation
-   - No rigid structures or lists
-   - No AI-sounding phrasing
-   - No greetings like “hey,” “hi,” or “hello”
-</reddit_comment_rules>
-"""
+Only mention {brand_name} if it's genuinely relevant and fits naturally. Most of the time don't mention it at all. Just be helpful first. Sound like how people actually talk on Reddit."""
 
         if user_prefs:
             # Add tone customization based on user preferences
             if user_prefs.tone == 'friendly':
-                prompt += "\n<tone>friendly</tone>"
+                prompt += "\n\nBe a bit more friendly and warm in your tone."
             elif user_prefs.tone == 'professional':
-                prompt += "\n<tone>professional</tone>"
+                prompt += "\n\nKeep it professional but still casual."
             elif user_prefs.tone == 'technical':
-                prompt += "\n<tone>technical</tone>"
+                prompt += "\n\nFeel free to get technical if it helps."
             
             # Add any custom response style from user preferences
             if user_prefs.response_style:
-                prompt += f"\n<custom_style>{user_prefs.response_style}</custom_style>"
+                prompt += f"\n\nAdditional style note: {user_prefs.response_style}"
 
-        prompt += "\nGenerate ONLY the Reddit comment text between <response> tags.\nThe comment should be 1-2 sentences."
+        # Removed XML instructions for more natural output
 
-# API call
-        response = anthropic_client.messages.create(
-    model="claude-3-haiku-20240307",
-    max_tokens=254,
-    temperature=0.99,
-    messages=[{"role": "user", "content": prompt}]
-)
+        # Comment out Claude API call for testing
+        # response = anthropic_client.messages.create(
+        #     model="claude-3-haiku-20240307",
+        #     max_tokens=254,
+        #     temperature=0.99,
+        #     messages=[{"role": "user", "content": prompt}]
+        # )
 
-        #print("SYSTEM:------------------------------------", system_message)
+        # GPT-4.1 API call
+        response = openai_client.responses.create(
+            model="gpt-4.1",
+            input=prompt
+        )
+
         print("\n")
         print("PROMPT:------------------------------------", prompt)
         
-        logging.info("Received response from Anthropic API")
+        logging.info("Received response from OpenAI GPT-4.1 API")
         
         # Handle empty responses
-        if not response or not response.content or len(response.content) == 0:
-            logging.error("Empty response from Anthropic API")
+        if not response or not response.output_text:
+            logging.error("Empty response from OpenAI API")
             return "Sorry, I couldn't generate a response at this time."
             
         # Extract the comment from response
-        comment = response.content[0].text.strip()
+        comment = response.output_text.strip()
         
-        # Extract content between response tags if present
-        if "<response>" in comment:
-            comment = comment.split("<response>")[1].split("</response>")[0].strip()
+        # Remove any structured tags that might leak through
+        comment = comment.replace("<response>", "").replace("</response>", "").strip()
         
-        # Basic cleanup and formatting
-        comment = comment.replace("Hey there, ", "").replace("Hi there, ", "").strip()
-        comment = comment.replace("-", " ").replace(":", "").replace("  ", "").strip()
-        comment = comment.replace("  ", " ").replace("  ", " ").replace("That's a great question!", "").replace("Hey there!", "")
+        # Remove AI tells and fix formatting
+        comment = comment.replace("Hope this helps!", "").replace("Let me know if you have questions!", "")
+        comment = comment.replace("I hope this helps", "").replace("Feel free to ask", "")
+        
+        # Remove all dashes and replace with natural alternatives
+        comment = comment.replace("—", ". ").replace("–", ". ").replace(" - ", ". ")
+        comment = comment.replace("-", " ")
+        
+        # Clean up extra spaces
+        comment = re.sub(r'\s+', ' ', comment).strip()
         
         # Ensure proper capitalization of brand name
         if brand_name:
@@ -402,6 +385,8 @@ What They Do: {brand_description}
         
     except Exception as e:
         logging.error(f"Error in generate_custom_comment: {str(e)}", exc_info=True)
+        if "openai" in str(e).lower():
+            return "Sorry, I'm having trouble with the AI service right now."
         return "Sorry, I'm having trouble generating a response right now."
 def generate_relevance_score(post_title: str, post_content: str, brand_id: int, db: Session) -> int:
     """Generate relevance score between post and brand"""
