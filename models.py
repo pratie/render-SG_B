@@ -21,6 +21,8 @@ class User(Base):
     payment_date = Column(DateTime, nullable=True)
     stripe_payment_id = Column(String, nullable=True)
     dodo_payment_id = Column(String, nullable=True)
+    subscription_plan = Column(String, default="none", nullable=False)  # "none", "monthly", "6month", "annual"
+    plan_expires_at = Column(DateTime, nullable=True)
 
     # Relationships
     brands = relationship("Brand", back_populates="user", foreign_keys="Brand.user_email")
@@ -250,9 +252,19 @@ class UserResponse(UserBase):
     payment_date: Optional[datetime] = None
     stripe_payment_id: Optional[str] = None
     dodo_payment_id: Optional[str] = None
+    subscription_plan: str = "none"
+    plan_expires_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+class PlanSelectionInput(BaseModel):
+    plan: str = Field(..., description="Subscription plan: 'monthly', '6month', or 'annual'")
+
+class PlanSelectionResponse(BaseModel):
+    checkout_url: str
+    plan: str
+    price: str
 
 class AlertSettingInput(BaseModel):
     telegram_chat_id: Optional[str] = Field('', description="Telegram chat ID for alerts")

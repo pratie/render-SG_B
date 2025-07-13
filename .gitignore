@@ -2,14 +2,18 @@
 
 fresh_env/
 .env
-Environment/
+.env.example
+/env
+/env.example
+..env
+.envenv
 env
+
+Environment/
+
 fresh_env
-env/
-.env    
-.env
-.env
-**/env/
+
+
 **/fresh_env/
 __pycache__
 venv/
