@@ -147,24 +147,39 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 reddit_config = {
     "client_id": os.getenv("REDDIT_CLIENT_ID"),
     "client_secret": os.getenv("REDDIT_CLIENT_SECRET"),
-    "user_agent": "apptest"
+    "user_agent": "python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)"
 }
 
 # Utility functions
 async def verify_subreddit(subreddit_name: str) -> bool:
+    """Verify if a subreddit exists and is accessible using Reddit's API"""
     try:
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
-            reddit = asyncpraw.Reddit(
-                **reddit_config,
-                requestor_class=asyncprawcore.Requestor,
-                requestor_kwargs={"session": session}
-            )
-            subreddit = await reddit.subreddit(subreddit_name)
-            await subreddit.load()
-            await reddit.close()
-            return True
-    except (prawcore.exceptions.Redirect, prawcore.exceptions.NotFound):
+        # Use simple HTTP request to check subreddit existence
+        # This avoids authentication issues with asyncpraw
+        url = f"https://www.reddit.com/r/{subreddit_name}/about.json"
+        headers = {
+            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)'
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # Check if the subreddit data is valid
+                    if 'data' in data and data['data'] and 'display_name' in data['data']:
+                        logging.info(f"Verified subreddit r/{subreddit_name} exists")
+                        return True
+                elif response.status == 403:
+                    logging.warning(f"Subreddit r/{subreddit_name} is private or restricted")
+                    return False
+                elif response.status == 404:
+                    logging.warning(f"Subreddit r/{subreddit_name} does not exist")
+                    return False
+                else:
+                    logging.warning(f"Unexpected response {response.status} for subreddit r/{subreddit_name}")
+                    return False
+    except Exception as e:
+        logging.error(f"Error verifying subreddit r/{subreddit_name}: {str(e)}")
         return False
 
 @retry(
@@ -516,14 +531,9 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
     updated_mentions_count = 0
     
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
-        reddit = asyncpraw.Reddit(
-            **reddit_config, 
-            requestor_class=asyncprawcore.Requestor,
-            requestor_kwargs={"session": session}
-        )
+        headers = {'User-Agent': reddit_config["user_agent"]}
 
         for subreddit_name in current_subreddits:
-            posts_iterator = None
             is_initial_scan_for_subreddit = False
             try:
                 clean_subreddit_name = subreddit_name.replace('r/', '')
@@ -533,37 +543,52 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                 logger.info("\n=== Analyzing r/%s for Brand ID %s ===", clean_subreddit_name, brand_id)
                 logger.info("Last analyzed: %s", last_analyzed_str)
 
-                try:
-                    subreddit_obj = await reddit.subreddit(clean_subreddit_name)
-                except Exception as e:
-                    logging.error(f"Error accessing subreddit r/{clean_subreddit_name} for Brand ID {brand_id}: {str(e)}")
-                    continue
-
+                # Determine URL and parameters based on scan type
                 if last_analyzed_ts == 0:
                     is_initial_scan_for_subreddit = True
-                    effective_limit =  70
+                    effective_limit = 250
                     effective_time_period = "month"
                     logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
-                    posts_iterator = subreddit_obj.top(time_filter=effective_time_period, limit=effective_limit)
+                    url = f"https://www.reddit.com/r/{clean_subreddit_name}/top.json?limit={effective_limit}&t={effective_time_period}"
                 else: 
                     is_initial_scan_for_subreddit = False
                     effective_limit = 300
                     logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
-                    posts_iterator = subreddit_obj.new(limit=effective_limit)
+                    url = f"https://www.reddit.com/r/{clean_subreddit_name}/new.json?limit={effective_limit}"
+
+                # Fetch posts from Reddit API
+                try:
+                    async with session.get(url, headers=headers) as response:
+                        if response.status != 200:
+                            logging.error(f"Error fetching posts from r/{clean_subreddit_name}: HTTP {response.status}")
+                            continue
+                        
+                        data = await response.json()
+                        if 'data' not in data or 'children' not in data['data']:
+                            logging.error(f"Invalid response format from r/{clean_subreddit_name}")
+                            continue
+                        
+                        posts = data['data']['children']
+                        logging.info(f"Fetched {len(posts)} posts from r/{clean_subreddit_name}")
+                
+                except Exception as e:
+                    logging.error(f"Error fetching posts from r/{clean_subreddit_name}: {str(e)}")
+                    continue
                 
                 processed_count_in_subreddit = 0
-                async for post in posts_iterator:
+                for post_data in posts:
+                    post = post_data['data']
                     processed_count_in_subreddit += 1
-                    if not is_initial_scan_for_subreddit and post.created_utc <= last_analyzed_ts:
-                        logger.info(f"Stopping at post older than last analysis for r/{clean_subreddit_name}: '{post.title}'")
+                    if not is_initial_scan_for_subreddit and post['created_utc'] <= last_analyzed_ts:
+                        logger.info(f"Stopping at post older than last analysis for r/{clean_subreddit_name}: '{post['title']}'")
                         break
 
-                    post_url = f"https://reddit.com{post.permalink}"
+                    post_url = f"https://reddit.com{post['permalink']}"
                     if post_url in processed_urls_in_session:
                         continue
                     processed_urls_in_session.add(post_url)
                     
-                    post_text = f"{post.title} {post.selftext if post.selftext else ''}".lower()
+                    post_text = f"{post['title']} {post.get('selftext', '') or ''}".lower()
                     matching_keywords = [kw for kw in current_keywords if kw.lower() in post_text]
                     
                     if matching_keywords:
@@ -572,8 +597,8 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                         # For existing posts, only update dynamic fields
                         if existing_mention_from_db:
                             changed = False
-                            if existing_mention_from_db.num_comments != post.num_comments:
-                                existing_mention_from_db.num_comments = post.num_comments
+                            if existing_mention_from_db.num_comments != post['num_comments']:
+                                existing_mention_from_db.num_comments = post['num_comments']
                                 changed = True
                             if changed:
                                 db.commit()
@@ -581,7 +606,7 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                             continue  # Skip to next post as we've updated what we needed
                             
                         # For new posts, calculate all fields including relevance score and intent
-                        relevance_score, explanation_line, intent_line = generate_relevance_score(post.title, post.selftext, brand_id, db)
+                        relevance_score, explanation_line, intent_line = generate_relevance_score(post['title'], post.get('selftext', '') or '', brand_id, db)
                         suggested_comment = explanation_line
                         intent = intent_line
 
@@ -589,22 +614,22 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                         # Create new mention
                         new_mention = RedditMention(
                             brand_id=brand.id,
-                            title=post.title,
-                            content=post.selftext if post.selftext else "",
+                            title=post['title'],
+                            content=post.get('selftext', '') or "",
                             url=post_url,
                             subreddit=clean_subreddit_name,
                             keyword=matching_keywords[0] if matching_keywords else "",
                             matching_keywords=json.dumps(matching_keywords),
-                            score=post.score,
-                            num_comments=post.num_comments,
+                            score=post['score'],
+                            num_comments=post['num_comments'],
                             relevance_score=relevance_score,
                             suggested_comment=suggested_comment,
                             intent=intent,
-                            created_utc=int(post.created_utc)
+                            created_utc=int(post['created_utc'])
                         )
                         db.add(new_mention)
                         new_mentions_count += 1
-                        logger.info(f"Added new mention for Brand ID {brand_id}, Post: {post.title[:50]}... URL: {post_url}")
+                        logger.info(f"Added new mention for Brand ID {brand_id}, Post: {post['title'][:50]}... URL: {post_url}")
                 
                 if processed_count_in_subreddit > 0 or is_initial_scan_for_subreddit:
                     subreddit_last_analyzed[clean_subreddit_name] = int(datetime.utcnow().timestamp())
@@ -614,7 +639,6 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                 logging.error(f"Error processing subreddit {subreddit_name} for Brand ID {brand_id}: {str(e)}", exc_info=True)
                 continue
 
-        await reddit.close()
         
         current_time_utc = datetime.utcnow()
         brand.subreddit_last_analyzed = json.dumps(subreddit_last_analyzed)
