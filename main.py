@@ -63,6 +63,12 @@ load_dotenv()
 # Configure logging
 #logging.basicConfig(level=logging.INFO)
 
+# Detect if running on Render (Render sets specific environment variables)
+IS_RENDER = os.getenv("RENDER") is not None or os.getenv("RENDER_SERVICE_NAME") is not None
+IS_PRODUCTION = os.getenv("ENV") == "production" or IS_RENDER
+
+logger.info(f"Running environment - ENV: {os.getenv('ENV')}, RENDER: {IS_RENDER}, PRODUCTION: {IS_PRODUCTION}")
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Reddit Analysis API", 
@@ -261,7 +267,7 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
         
         if not suggested_subreddits:
             print("No subreddits were suggested by AI, using default")
-            if os.getenv("ENV") == "production" or os.getenv("RENDER"):
+            if IS_PRODUCTION:
                 return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
             else:
                 return ["technology", "artificial", "news"]
@@ -281,7 +287,7 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
         if not verified_subreddits:
             print("No valid subreddits found, using default")
             # Environment-specific fallback subreddits
-            if os.getenv("ENV") == "production" or os.getenv("RENDER"):
+            if IS_PRODUCTION:
                 # More general subreddits for production to avoid IP blocking
                 return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"] 
             else:
@@ -294,13 +300,13 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
         print(f"Anthropic API error: {str(e)}")
         if "overloaded" in str(e).lower():
             print("AI service is overloaded, using default subreddits")
-        if os.getenv("ENV") == "production" or os.getenv("RENDER"):
+        if IS_PRODUCTION:
             return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
         else:
             return ["technology", "artificial", "news"]
     except Exception as e:
         print(f"Error in get_subreddits: {str(e)}")
-        if os.getenv("ENV") == "production" or os.getenv("RENDER"):
+        if IS_PRODUCTION:
             return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
         else:
             return ["technology", "artificial", "news"]
@@ -895,7 +901,7 @@ async def create_brand(
             subreddits = await get_subreddits(brand_input.name, brand_input.description, keywords)
         except Exception as e:
             logging.error(f"Error getting subreddits: {str(e)}")
-            if os.getenv("ENV") == "production" or os.getenv("RENDER"):
+            if IS_PRODUCTION:
                 subreddits = ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
             else:
                 subreddits = ["technology", "artificial", "news"]
