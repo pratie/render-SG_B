@@ -264,10 +264,7 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
             if os.getenv("ENV") == "production" or os.getenv("RENDER"):
                 return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
             else:
-                if os.getenv("ENV") == "production" or os.getenv("RENDER"):
-            return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
-        else:
-            return ["technology", "artificial", "news"]
+                return ["technology", "artificial", "news"]
             
         # Verify each subreddit exists
         verified_subreddits = []
@@ -289,10 +286,7 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
                 return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"] 
             else:
                 # Original defaults for development
-                if os.getenv("ENV") == "production" or os.getenv("RENDER"):
-            return ["AskReddit", "todayilearned", "explainlikeimfive", "LifeProTips", "YouShouldKnow"]
-        else:
-            return ["technology", "artificial", "news"]
+                return ["technology", "artificial", "news"]
             
         return verified_subreddits
         
