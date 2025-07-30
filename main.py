@@ -564,33 +564,20 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
     new_mentions_count = 0
     updated_mentions_count = 0
     
-    # Get Reddit client credentials for OAuth
+    # Try to get Reddit OAuth token, fallback to anonymous if failed
     reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
     reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
-    
-    if not reddit_client_id or not reddit_client_secret:
-        logger.error("Reddit API credentials not found in environment variables")
-        return [], 0, 0
-    
-    # Get app-only OAuth token for API access
-    auth_data = {
-        'grant_type': 'client_credentials'
-    }
-    
-    auth_headers = {
-        'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)'
-    }
-    
-    # Get OAuth token
-    auth_response = None
     access_token = None
+    use_oauth = False
     
-    try:
-        import requests
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as auth_session:
-            auth_url = 'https://www.reddit.com/api/v1/access_token'
+    if reddit_client_id and reddit_client_secret:
+        try:
+            import requests
+            auth_data = {'grant_type': 'client_credentials'}
+            auth_headers = {'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)'}
+            
             auth_response = requests.post(
-                auth_url,
+                'https://www.reddit.com/api/v1/access_token',
                 auth=(reddit_client_id, reddit_client_secret),
                 data=auth_data,
                 headers=auth_headers,
@@ -600,25 +587,26 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
             if auth_response.status_code == 200:
                 token_data = auth_response.json()
                 access_token = token_data.get('access_token')
-                logger.info("Successfully obtained Reddit OAuth token")
+                use_oauth = True
+                logger.info("✅ Successfully obtained Reddit OAuth token")
             else:
-                logger.error(f"Failed to get Reddit OAuth token: {auth_response.status_code} - {auth_response.text}")
-                return [], 0, 0
-    except Exception as e:
-        logger.error(f"Error getting Reddit OAuth token: {str(e)}")
-        return [], 0, 0
+                logger.warning(f"OAuth failed ({auth_response.status_code}), falling back to anonymous API")
+        except Exception as e:
+            logger.warning(f"OAuth error, falling back to anonymous API: {str(e)}")
     
-    if not access_token:
-        logger.error("No access token obtained from Reddit")
-        return [], 0, 0
+    if not use_oauth:
+        logger.info("🔄 Using anonymous Reddit API (rate limited but functional)")
     
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
+        # Set headers based on whether we have OAuth token
         headers = {
             'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)',
-            'Authorization': f'Bearer {access_token}',
             'Accept': 'application/json',
             'Connection': 'keep-alive'
         }
+        
+        if use_oauth and access_token:
+            headers['Authorization'] = f'Bearer {access_token}'
 
         for subreddit_name in current_subreddits:
             is_initial_scan_for_subreddit = False
@@ -630,18 +618,24 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                 logger.info("\n=== Analyzing r/%s for Brand ID %s ===", clean_subreddit_name, brand_id)
                 logger.info("Last analyzed: %s", last_analyzed_str)
 
-                # Determine URL and parameters based on scan type
+                # Determine URL and parameters based on scan type and auth method
                 if last_analyzed_ts == 0:
                     is_initial_scan_for_subreddit = True
                     effective_limit = 250
                     effective_time_period = "month"
                     logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
-                    url = f"https://oauth.reddit.com/r/{clean_subreddit_name}/top?limit={effective_limit}&t={effective_time_period}"
+                    if use_oauth:
+                        url = f"https://oauth.reddit.com/r/{clean_subreddit_name}/top?limit={effective_limit}&t={effective_time_period}"
+                    else:
+                        url = f"https://www.reddit.com/r/{clean_subreddit_name}/top.json?limit={effective_limit}&t={effective_time_period}"
                 else: 
                     is_initial_scan_for_subreddit = False
                     effective_limit = 300
                     logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
-                    url = f"https://oauth.reddit.com/r/{clean_subreddit_name}/new?limit={effective_limit}"
+                    if use_oauth:
+                        url = f"https://oauth.reddit.com/r/{clean_subreddit_name}/new?limit={effective_limit}"
+                    else:
+                        url = f"https://www.reddit.com/r/{clean_subreddit_name}/new.json?limit={effective_limit}"
 
                 # Add delay between requests to avoid rate limiting (increased for production)
                 delay = 3.0 if IS_PRODUCTION else 1.0
