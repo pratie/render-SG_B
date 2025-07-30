@@ -158,17 +158,18 @@ reddit_config = {
 
 # Utility functions
 async def verify_subreddit(subreddit_name: str) -> bool:
-    """Verify if a subreddit exists and is accessible using Reddit's API"""
+    """Skip subreddit verification on production to avoid 403 errors"""
+    if IS_PRODUCTION:
+        # On production (Render), skip verification to avoid IP blocking
+        logging.info(f"Production environment: Assuming subreddit r/{subreddit_name} is valid")
+        return True
+    
     try:
-        # Use simple HTTP request to check subreddit existence
+        # Use simple HTTP request to check subreddit existence (dev only)
         url = f"https://www.reddit.com/r/{subreddit_name}/about.json"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (compatible; reddit-analysis-bot/1.0; +https://sneakyguy.com)',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)',
+            'Accept': 'application/json'
         }
         
         # Add delay to avoid rate limiting
@@ -185,22 +186,19 @@ async def verify_subreddit(subreddit_name: str) -> bool:
                             logging.info(f"Verified subreddit r/{subreddit_name} exists")
                             return True
                     elif response.status == 403:
-                        # On production, treat 403 as existing but private
-                        logging.warning(f"Subreddit r/{subreddit_name} may be private, but treating as valid")
-                        return True  # Changed: Allow private subreddits on production
+                        logging.warning(f"Subreddit r/{subreddit_name} may be private, treating as valid")
+                        return True
                     elif response.status == 404:
                         logging.warning(f"Subreddit r/{subreddit_name} does not exist")
                         return False
                     else:
-                        logging.warning(f"Unexpected response {response.status} for subreddit r/{subreddit_name}")
-                        # On production, assume it exists if we get unexpected responses
+                        logging.warning(f"Unexpected response {response.status} for subreddit r/{subreddit_name}, treating as valid")
                         return True
             except asyncio.TimeoutError:
                 logging.warning(f"Timeout verifying subreddit r/{subreddit_name}, assuming valid")
                 return True
     except Exception as e:
         logging.error(f"Error verifying subreddit r/{subreddit_name}: {str(e)}")
-        # On production errors, assume subreddit is valid to avoid blocking analysis
         return True
 
 @retry(
@@ -566,12 +564,59 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
     new_mentions_count = 0
     updated_mentions_count = 0
     
+    # Get Reddit client credentials for OAuth
+    reddit_client_id = os.getenv("REDDIT_CLIENT_ID")
+    reddit_client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+    
+    if not reddit_client_id or not reddit_client_secret:
+        logger.error("Reddit API credentials not found in environment variables")
+        return [], 0, 0
+    
+    # Get app-only OAuth token for API access
+    auth_data = {
+        'grant_type': 'client_credentials'
+    }
+    
+    auth_headers = {
+        'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)'
+    }
+    
+    # Get OAuth token
+    auth_response = None
+    access_token = None
+    
+    try:
+        import requests
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as auth_session:
+            auth_url = 'https://www.reddit.com/api/v1/access_token'
+            auth_response = requests.post(
+                auth_url,
+                auth=(reddit_client_id, reddit_client_secret),
+                data=auth_data,
+                headers=auth_headers,
+                timeout=10
+            )
+            
+            if auth_response.status_code == 200:
+                token_data = auth_response.json()
+                access_token = token_data.get('access_token')
+                logger.info("Successfully obtained Reddit OAuth token")
+            else:
+                logger.error(f"Failed to get Reddit OAuth token: {auth_response.status_code} - {auth_response.text}")
+                return [], 0, 0
+    except Exception as e:
+        logger.error(f"Error getting Reddit OAuth token: {str(e)}")
+        return [], 0, 0
+    
+    if not access_token:
+        logger.error("No access token obtained from Reddit")
+        return [], 0, 0
+    
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (compatible; reddit-analysis-bot/1.0; +https://sneakyguy.com)',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)',
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json',
             'Connection': 'keep-alive'
         }
 
@@ -591,15 +636,16 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                     effective_limit = 250
                     effective_time_period = "month"
                     logger.info(f"Performing initial scan for r/{clean_subreddit_name}. Time period: '{effective_time_period}', Limit: {effective_limit} posts")
-                    url = f"https://www.reddit.com/r/{clean_subreddit_name}/top.json?limit={effective_limit}&t={effective_time_period}"
+                    url = f"https://oauth.reddit.com/r/{clean_subreddit_name}/top?limit={effective_limit}&t={effective_time_period}"
                 else: 
                     is_initial_scan_for_subreddit = False
                     effective_limit = 300
                     logger.info(f"Fetching up to: {effective_limit} new posts for r/{clean_subreddit_name} since {last_analyzed_str}")
-                    url = f"https://www.reddit.com/r/{clean_subreddit_name}/new.json?limit={effective_limit}"
+                    url = f"https://oauth.reddit.com/r/{clean_subreddit_name}/new?limit={effective_limit}"
 
-                # Add delay between requests to avoid rate limiting
-                await asyncio.sleep(1.0)
+                # Add delay between requests to avoid rate limiting (increased for production)
+                delay = 3.0 if IS_PRODUCTION else 1.0
+                await asyncio.sleep(delay)
                 
                 # Fetch posts from Reddit API
                 try:
@@ -611,7 +657,11 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
                             continue
                         elif response.status == 429:
                             logging.warning(f"Rate limited on r/{clean_subreddit_name} - waiting longer")
-                            await asyncio.sleep(5.0)
+                            backoff_delay = 10.0 if IS_PRODUCTION else 5.0
+                            await asyncio.sleep(backoff_delay)
+                            continue
+                        elif response.status == 401:
+                            logging.error(f"OAuth token invalid or expired for r/{clean_subreddit_name}")
                             continue
                         elif response.status != 200:
                             logging.error(f"Error fetching posts from r/{clean_subreddit_name}: HTTP {response.status}")
