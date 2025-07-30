@@ -153,7 +153,7 @@ openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 reddit_config = {
     "client_id": os.getenv("REDDIT_CLIENT_ID"),
     "client_secret": os.getenv("REDDIT_CLIENT_SECRET"),
-    "user_agent": "python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)"
+    "user_agent": "python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)"
 }
 
 # Utility functions
@@ -168,7 +168,7 @@ async def verify_subreddit(subreddit_name: str) -> bool:
         # Use simple HTTP request to check subreddit existence (dev only)
         url = f"https://www.reddit.com/r/{subreddit_name}/about.json"
         headers = {
-            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)',
+            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)',
             'Accept': 'application/json'
         }
         
@@ -574,7 +574,7 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
         try:
             import requests
             auth_data = {'grant_type': 'client_credentials'}
-            auth_headers = {'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)'}
+            auth_headers = {'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)'}
             
             auth_response = requests.post(
                 'https://www.reddit.com/api/v1/access_token',
@@ -600,7 +600,7 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
         # Set headers based on whether we have OAuth token
         headers = {
-            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/Overall-Poem-9764)',
+            'User-Agent': 'python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)',
             'Accept': 'application/json',
             'Connection': 'keep-alive'
         }
