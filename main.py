@@ -387,7 +387,7 @@ Only mention {brand_name} if it's genuinely relevant and fits naturally. Most of
 
         # GPT-4.1 API call
         response = openai_client.responses.create(
-            model="gpt-4.1",
+            model="gpt-5-mini",
             input=prompt
         )
 

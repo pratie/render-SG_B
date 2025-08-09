@@ -9,7 +9,7 @@ client = genai.Client(api_key="")
 
 response = client.models.generate_content(
     model="gemini-2.5-flash-preview-04-17-thinking",
-    contents="give me a comment to post on r/saas sub post is about lead gen, i want to sublty prompt my lead gen tool- SneakyguyAI",
+    contents="hello AI",
 )
 
 print(response.text)
