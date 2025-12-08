@@ -146,13 +146,16 @@ app.include_router(preferences_router)
 app.include_router(alerts_router)
 
 # Initialize clients
-anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+anthropic_api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+openai_api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+
+anthropic_client = anthropic.Anthropic(api_key=anthropic_api_key)
+openai_client = OpenAI(api_key=openai_api_key)
 
 # Initialize Reddit client
 reddit_config = {
-    "client_id": os.getenv("REDDIT_CLIENT_ID"),
-    "client_secret": os.getenv("REDDIT_CLIENT_SECRET"),
+    "client_id": (os.getenv("REDDIT_CLIENT_ID") or "").strip(),
+    "client_secret": (os.getenv("REDDIT_CLIENT_SECRET") or "").strip(),
     "user_agent": "python:reddit-analysis-api:v1.0.0 (by /u/snaplearn2earn)"
 }
 
