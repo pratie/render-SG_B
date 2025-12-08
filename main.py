@@ -58,7 +58,7 @@ from routers.preferences import router as preferences_router
 from routers.alerts import router as alerts_router
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure logging
 #logging.basicConfig(level=logging.INFO)
