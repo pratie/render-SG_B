@@ -221,7 +221,7 @@ NOTE: Please avoid "-" (hyphens) in keywords
 """
         
         response = anthropic_client.messages.create(
-            model="claude-3-opus-20240229",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -256,7 +256,7 @@ async def get_subreddits(brand_name: str, description: str, keywords: list[str])
         topic might occur. Only include the subreddit names without 'r/' prefix, one per line."""
         
         response = anthropic_client.messages.create(
-            model="claude-3-opus-20240229",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
