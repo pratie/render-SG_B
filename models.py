@@ -41,6 +41,11 @@ class Brand(Base):
     subreddit_last_analyzed = Column(String, default="{}")  # JSON dict of subreddit -> timestamp
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Background analysis tracking
+    analysis_status = Column(String, default="idle")  # idle, scanning, completed, failed
+    analysis_progress = Column(Integer, default=0) # 0-100
+    analysis_status_message = Column(String, nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="brands")
@@ -288,10 +293,20 @@ class AlertSettingResponse(BaseModel):
         from_attributes = True
 
 class BrandInput(BaseModel):
-    name: str
-    description: str
-    keywords: Optional[List[str]] = []
-    subreddits: Optional[List[str]] = []
+    name: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=10, max_length=1000)
+    keywords: Optional[List[str]] = Field(default=[], max_items=15)
+    subreddits: Optional[List[str]] = Field(default=[], max_items=15)
+
+    @validator('keywords', 'subreddits')
+    def validate_lists(cls, v):
+        if v is None:
+            return []
+        # Filter out empty strings and strip whitespace
+        cleaned = [item.strip() for item in v if item and isinstance(item, str) and item.strip()]
+        if len(cleaned) > 15:
+            raise ValueError("Maximum 15 items allowed")
+        return cleaned
 
 class AnalysisInput(BaseModel):
     brand_id: int
@@ -416,6 +431,9 @@ class BrandResponse(BaseModel):
     updated_at: datetime
     user_email: str
     last_analyzed: Optional[datetime]
+    analysis_status: str = "idle"
+    analysis_progress: int = 0
+    analysis_status_message: Optional[str] = None
 
     class Config:
         orm_mode = True

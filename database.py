@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
@@ -138,7 +138,7 @@ def wait_for_db():
         try:
             # Try to connect to database
             with engine.connect() as conn:
-                conn.execute("SELECT 1")
+                conn.execute(text("SELECT 1"))
                 logger.info("Successfully connected to database")
                 return True
         except Exception as e:
@@ -209,10 +209,10 @@ def init_db():
     
     # Additional table creation for alerts if not already in models
     try:
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             # Check if alert_settings table exists, if not create it
             if not conn.dialect.has_table(conn, 'alert_settings'):
-                conn.execute("""
+                conn.execute(text("""
                     CREATE TABLE alert_settings (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_email TEXT UNIQUE,
@@ -224,10 +224,33 @@ def init_db():
                         created_at TIMESTAMP,
                         updated_at TIMESTAMP
                     )
-                """)
+                """))
                 logger.info("Created alert_settings table")
+                
+            # Add new columns to brands table if they don't exist
+            # This is a simple migration helper
+            try:
+                # Get existing columns
+                cursor = conn.execute(text("PRAGMA table_info(brands)"))
+                columns = [row[1] for row in cursor.fetchall()]
+                
+                if 'analysis_status' not in columns:
+                    conn.execute(text("ALTER TABLE brands ADD COLUMN analysis_status TEXT DEFAULT 'idle'"))
+                    logger.info("Added analysis_status column to brands table")
+                
+                if 'analysis_progress' not in columns:
+                    conn.execute(text("ALTER TABLE brands ADD COLUMN analysis_progress INTEGER DEFAULT 0"))
+                    logger.info("Added analysis_progress column to brands table")
+                    
+                if 'analysis_status_message' not in columns:
+                    conn.execute(text("ALTER TABLE brands ADD COLUMN analysis_status_message TEXT"))
+                    logger.info("Added analysis_status_message column to brands table")
+                    
+            except Exception as migrate_e:
+                logger.error(f"Migration error for brands table: {migrate_e}")
+                
     except Exception as e:
-        logger.error(f"Error initializing alert_settings table: {e}")
+        logger.error(f"Error initializing database tables: {e}")
 
 # Initialize database on startup
 init_db()

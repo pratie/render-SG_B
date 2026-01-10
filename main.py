@@ -10,7 +10,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, Depends, HTTPException, Body, Request, Query
+from fastapi import FastAPI, Depends, HTTPException, Body, Request, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
@@ -117,6 +117,31 @@ app.add_middleware(
 async def startup_event():
     init_db()
     logging.info("Database initialized") # Use your existing logger if preferred
+
+async def check_paid_user(
+    current_user_email: str = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """Dependency to check if the current user has an active paid subscription"""
+    user = db.query(User).filter(User.email == current_user_email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Simple check for has_paid based on User model
+    if not user.has_paid:
+        raise HTTPException(
+            status_code=402, 
+            detail="Payment required. Please upgrade your plan to access this feature."
+        )
+    
+    # Additional expiration check if applicable
+    if user.plan_expires_at and user.plan_expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=402, 
+            detail="Your subscription has expired. Please renew to continue."
+        )
+        
+    return user
 
 @app.get(
     "/projects/", 
@@ -361,9 +386,12 @@ async def generate_custom_comment(
 
 You know about {brand_name} ({brand_description}).
 
-Write a short, natural comment. Keep it 1-2 sentences max. Be casual and direct. No dashes, no fancy punctuation, no long explanations, no corporate speak.
+Write a short, natural comment. Keep it 1-2 sentences max. Be casual and direct. Avoid sounding like an advertisement. 
+Focus on being helpful or providing value first. If {brand_name} is genuinely helpful for this specific problem, mention it casually (e.g., "I've been using {brand_name} for this and it's worked well"). 
+If it's not a perfect fit, just give good advice and don't mention the brand at all. 
 
-Only mention {brand_name} if it's genuinely relevant and fits naturally. Most of the time don't mention it at all. Just be helpful first. Sound like how people actually talk on Reddit."""
+Tone: Sound like a Redditor (conversational, maybe slightly opinionated or empathetic). Avoid corporate phrases, exclamation marks after every sentence, and formal openings. No "Hope this helps!" or "As an AI...".
+"""
 
         if user_prefs:
             # Add tone customization based on user preferences
@@ -388,24 +416,23 @@ Only mention {brand_name} if it's genuinely relevant and fits naturally. Most of
         #     messages=[{"role": "user", "content": prompt}]
         # )
 
-        # GPT-4.1 API call
-        response = openai_client.responses.create(
-            model="gpt-5-mini",
-            input=prompt
+        # gpt-4o-mini API call
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.7
         )
 
-        print("\n")
-        print("PROMPT:------------------------------------", prompt)
-        
-        logging.info("Received response from OpenAI GPT-4.1 API")
+        logging.info("Received response from OpenAI GPT-4o-mini API")
         
         # Handle empty responses
-        if not response or not response.output_text:
+        if not response or not response.choices:
             logging.error("Empty response from OpenAI API")
             return "Sorry, I couldn't generate a response at this time."
             
         # Extract the comment from response
-        comment = response.output_text.strip()
+        comment = response.choices[0].message.content.strip()
         
         # Remove any structured tags that might leak through
         comment = comment.replace("<response>", "").replace("</response>", "").strip()
@@ -520,7 +547,7 @@ def generate_relevance_score(post_title: str, post_content: str, brand_id: int, 
 async def get_initial_analysis(
     brand_input: BrandInput,
     request: Request,
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -611,7 +638,20 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
         if use_oauth and access_token:
             headers['Authorization'] = f'Bearer {access_token}'
 
-        for subreddit_name in current_subreddits:
+        # Update initial status
+        brand.analysis_status = "scanning"
+        brand.analysis_progress = 0
+        brand.analysis_status_message = f"Starting scan of {len(current_subreddits)} subreddits..."
+        db.commit()
+
+        total_subreddits = len(current_subreddits)
+        for idx, subreddit_name in enumerate(current_subreddits):
+            # Update progress
+            progress = int((idx / total_subreddits) * 100)
+            brand.analysis_progress = progress
+            brand.analysis_status_message = f"Scanning r/{subreddit_name.replace('r/', '')} ({idx + 1}/{total_subreddits})..."
+            db.commit()
+            
             is_initial_scan_for_subreddit = False
             try:
                 clean_subreddit_name = subreddit_name.replace('r/', '')
@@ -747,6 +787,9 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
         current_time_utc = datetime.utcnow()
         brand.subreddit_last_analyzed = json.dumps(subreddit_last_analyzed)
         brand.last_analyzed = current_time_utc
+        brand.analysis_status = "completed"
+        brand.analysis_progress = 100
+        brand.analysis_status_message = f"Scan complete. Found {new_mentions_count} new leads."
         db.commit()
         
         logger.info("\n=== Analysis Summary for Brand ID %s ===", brand_id)
@@ -768,12 +811,13 @@ async def _perform_brand_reddit_analysis(brand_id: int, db: Session) -> Tuple[Li
 
         return comprehensive_mentions_list_for_response, new_mentions_count, updated_mentions_count
 
-@app.post("/analyze/reddit", response_model=AnalysisResponse, tags=["analysis"])
+@app.post("/analyze/reddit", response_model=dict, tags=["analysis"])
 @get_analysis_rate_limit() 
 async def analyze_reddit_content(
     analysis_input: AnalysisInput,
     request: Request,
-    current_user_email: str = Depends(get_current_user),
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -783,109 +827,70 @@ async def analyze_reddit_content(
     Triggers core analysis logic and returns results.
     """
     try:
-        brand_check = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user_email)
+        brand_check = BrandCRUD.get_brand(db, analysis_input.brand_id, current_user.email)
         if not brand_check:
             raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
 
-        comprehensive_mentions_list, new_mentions_found, updated_mentions_found = await _perform_brand_reddit_analysis(
-            brand_id=analysis_input.brand_id, 
-            db=db
+        # 1. Block concurrent scans
+        if brand_check.analysis_status == "scanning":
+            return {
+                "status": "already_running",
+                "message": "A scan is already in progress for this project.",
+                "brand_id": analysis_input.brand_id
+            }
+
+        # 2. Enforce 10-minute cooldown between scans
+        if brand_check.last_analyzed:
+            time_since_last = datetime.utcnow() - brand_check.last_analyzed
+            if time_since_last.total_seconds() < 600: # 10 minutes
+                wait_time = int(600 - time_since_last.total_seconds())
+                return {
+                    "status": "cooldown",
+                    "message": f"Scan is on cooldown. Please wait {wait_time // 60}m {wait_time % 60}s before next scan.",
+                    "brand_id": analysis_input.brand_id
+                }
+
+        # Set status to scanning immediately
+        brand_check.analysis_status = "scanning"
+        brand_check.analysis_progress = 0
+        brand_check.analysis_status_message = "Scan queued..."
+        db.commit()
+
+        # Add to background tasks
+        background_tasks.add_task(
+            _perform_brand_reddit_analysis_wrapper, 
+            analysis_input.brand_id
         )
         
-        logger.info(f"Endpoint analyze_reddit_content for Brand ID {analysis_input.brand_id} completed. "
-                    f"New: {new_mentions_found}, Updated: {updated_mentions_found}.")
-
-        return AnalysisResponse(
-            status="success",
-            posts=comprehensive_mentions_list,
-            matching_posts=comprehensive_mentions_list
-        )
+        return {
+            "status": "started",
+            "message": "Reddit analysis started in the background",
+            "brand_id": analysis_input.brand_id
+        }
 
     except HTTPException as he:
         raise he
     except Exception as e:
-        logger.error(f"Unexpected error in analyze_reddit_content endpoint for Brand ID {analysis_input.brand_id}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
-        
-    try:
-        with conn.cursor() as cur:
-            # Check if the table exists
-            cur.execute(
-                f"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = '{table}')"
-            )
-            if not cur.fetchone()[0]:
-                logging.error(f"Table '{table}' does not exist")
-                return []
-            
-            # Determine which fields to search based on the table
-            if table == 'submissions':
-                search_fields = ['title', 'selftext']
-                display_fields = [
-                    'id', 'author', 'title', 'selftext', 'score', 
-                    'created_utc', 'subreddit', 'num_comments', 'permalink'
-                ]
-            else:  # comments
-                search_fields = ['body']
-                display_fields = [
-                    'id', 'author', 'body', 'score', 'created_utc', 'subreddit', 'link_id'
-                ]
-            
-            # Handle keywords list properly
-            if isinstance(keywords, str):
-                keyword_list = [k.strip() for k in keywords.split(',')]
-            elif isinstance(keywords, list):
-                keyword_list = keywords
-            else:
-                keyword_list = list(keywords)
-            
-            # Build the WHERE clause to match any of the keywords
-            keyword_conditions = []
-            params = []
-            for keyword in keyword_list:
-                field_conditions = []
-                for field in search_fields:
-                    field_conditions.append(f"{field} ILIKE %s")
-                    params.append(f"%{keyword}%")
-                # Each keyword can match in any field
-                keyword_conditions.append(f"({' OR '.join(field_conditions)})")
-            
-            # Join all keyword conditions with OR to capture any match
-            where_clause = ' OR '.join(keyword_conditions)
-            
-            # Add subreddit filter if specified
-            if subreddit:
-                where_clause = f"({where_clause}) AND subreddit = %s"
-                params.append(subreddit)
-            
-            sql_query = f"""
-                SELECT {', '.join(display_fields)}
-                FROM {table}
-                WHERE {where_clause}
-                ORDER BY score DESC
-                LIMIT %s OFFSET %s
-            """
-            params.extend([limit, offset])
-            
-            logging.info(f"Executing SQL: {sql_query} with params: {params}")
-            cur.execute(sql_query, params)
-            results = cur.fetchall()
-            logging.info(f"Found {len(results)} results from database")
-            
-            # Convert results to a list of dictionaries
-            posts = []
-            for result in results:
-                post = {}
-                for i, field in enumerate(display_fields):
-                    post[field] = result[i]
-                posts.append(post)
-            
-            return posts
-    except Exception as e:
-        logging.error(f"Error searching keywords: {e}")
-        return []
-    finally:
-        conn.close()
+        logger.error(f"Error starting analysis for Brand ID {analysis_input.brand_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to start analysis: {str(e)}")
 
+async def _perform_brand_reddit_analysis_wrapper(brand_id: int):
+    """Wrapper for background task to manage database session properly"""
+    # Create a new database session for the background task
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        await _perform_brand_reddit_analysis(brand_id, db)
+    except Exception as e:
+        logger.error(f"Error in background reddit analysis for brand {brand_id}: {str(e)}")
+        # Update brand status to failed
+        brand = db.query(Brand).filter(Brand.id == brand_id).first()
+        if brand:
+            brand.analysis_status = "failed"
+            brand.analysis_status_message = f"Error: {str(e)}"
+            db.commit()
+    finally:
+        db.close()
 
 @app.put(
     "/projects/{brand_id}", 
@@ -897,11 +902,11 @@ async def analyze_reddit_content(
 async def update_brand(
     brand_id: int,
     brand_input: BrandInput,
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """Update a brand/project"""
-    brand = BrandCRUD.get_brand(db, brand_id, current_user_email)
+    brand = BrandCRUD.get_brand(db, brand_id, current_user.email)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
     
@@ -932,7 +937,7 @@ async def update_brand(
 )
 async def create_brand(
     brand_input: BrandInput,
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """Create a new brand/project"""
@@ -964,7 +969,7 @@ async def create_brand(
         brand = BrandCRUD.create_brand(
             db=db,
             brand_input=brand_data,
-            user_email=current_user_email
+            user_email=current_user.email
         )
         
         return brand
@@ -972,26 +977,6 @@ async def create_brand(
         logging.error(f"Error creating brand: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get(
-    "/projects/", 
-    response_model=List[BrandResponse],
-    tags=["brands"],
-    summary="Get all projects",
-    description="Get all projects for the current user"
-)
-async def get_user_brands(
-    skip: int = 0,
-    limit: int = 50,
-    current_user_email: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all brands/projects for the current user"""
-    try:
-        brands = BrandCRUD.get_user_brands(db, current_user_email, skip=skip, limit=limit)
-        return [BrandResponse.from_orm(brand) for brand in brands]
-    except Exception as e:
-        logging.error(f"Error getting brands: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get(
     "/projects/{brand_id}", 
@@ -1019,11 +1004,11 @@ async def get_brand(
 )
 async def delete_brand(
     brand_id: int,
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """Delete a brand/project"""
-    brand = BrandCRUD.get_brand(db, brand_id, current_user_email)
+    brand = BrandCRUD.get_brand(db, brand_id, current_user.email)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
     BrandCRUD.delete_brand(db, brand_id)
@@ -1039,11 +1024,11 @@ async def delete_brand(
 async def update_brand_keywords(
     brand_id: int,
     keywords: List[str] = Body(..., embed=True),
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """Update keywords for a brand/project"""
-    brand = BrandCRUD.get_brand(db, brand_id, current_user_email)
+    brand = BrandCRUD.get_brand(db, brand_id, current_user.email)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
     return BrandCRUD.update_brand_keywords(db, brand_id, keywords)
@@ -1058,11 +1043,11 @@ async def update_brand_keywords(
 async def update_brand_subreddits(
     brand_id: int,
     subreddits: List[str] = Body(..., embed=True),
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """Update subreddits for a brand/project"""
-    brand = BrandCRUD.get_brand(db, brand_id, current_user_email)
+    brand = BrandCRUD.get_brand(db, brand_id, current_user.email)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found or unauthorized access")
     return BrandCRUD.update_brand_subreddits(db, brand_id, subreddits)
@@ -1131,7 +1116,7 @@ class RedditCommentError(Exception):
 async def post_reddit_comment(
     comment_input: PostCommentInput,
     request: Request,
-    current_user_email: str = Depends(get_current_user),
+    current_user: User = Depends(check_paid_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -1139,18 +1124,18 @@ async def post_reddit_comment(
     Requires authentication and proper Reddit API credentials.
     Rate limited to 5 comments per user per 24 hours.
     """
-    logging.info(f"Starting comment posting request from user: {current_user_email}")
+    logging.info(f"Starting comment posting request from user: {current_user.email}")
 
     print('post comment input*50', comment_input)
     
     try:
         # Check rate limit
-        logging.info(f"Checking rate limit for user: {current_user_email}")
-        comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user_email)
-        logging.info(f"Current comment count for user {current_user_email}: {comment_count}/5")
+        logging.info(f"Checking rate limit for user: {current_user.email}")
+        comment_count = RedditCommentCRUD.get_user_comment_count_last_24h(db, current_user.email)
+        logging.info(f"Current comment count for user {current_user.email}: {comment_count}/5")
         
-        if comment_count >= 10:  
-            logging.warning(f"Rate limit exceeded for user {current_user_email}. Count: {comment_count}")
+        if comment_count >= 5:  
+            logging.warning(f"Rate limit exceeded for user {current_user.email}. Count: {comment_count}")
             raise HTTPException(
                 status_code=429,
                 detail="Rate limit exceeded. You can only post 5 comments per 24 hours."
@@ -1158,7 +1143,7 @@ async def post_reddit_comment(
 
         # Verify brand ownership
         logging.info(f"Verifying brand ownership for brand_id: {comment_input.brand_id}")
-        brand = BrandCRUD.get_brand(db, comment_input.brand_id, current_user_email)
+        brand = BrandCRUD.get_brand(db, comment_input.brand_id, current_user.email)
         if not brand:
             raise HTTPException(
                 status_code=404,
@@ -1189,7 +1174,7 @@ async def post_reddit_comment(
             )
 
         # Get Reddit token
-        token = await get_reddit_token(db, current_user_email)
+        token = await get_reddit_token(db, current_user.email)
         if not token:
             raise HTTPException(
                 status_code=401,
@@ -1329,11 +1314,11 @@ async def post_reddit_comment(
 async def generate_comment_endpoint(
     comment_input: CommentInput,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: User = Depends(check_paid_user)
 ):
     """
     Generate a custom comment for a Reddit post.
-    Requires authentication.
+    Requires authentication and active plan.
     """
     try:
         # Generate the comment
@@ -1342,7 +1327,7 @@ async def generate_comment_endpoint(
             post_content=comment_input.post_content,
             brand_id=comment_input.brand_id,
             db=db,
-            user_email=current_user  # current_user is already the email string
+            user_email=current_user.email
         )
         
         return {"comment": comment}
