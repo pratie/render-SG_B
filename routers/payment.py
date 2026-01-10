@@ -20,19 +20,9 @@ router = APIRouter(prefix="/payment", tags=["payment"])
 # Pricing configuration
 PRICING_PLANS = {
     "monthly": {
-        "price": "$9/month",
+        "price": "$19",
         "duration_months": 1,
-        "env_key": "DODO_MONTHLY_PRODUCT_ID"  # You'll need to add this to .env
-    },
-    "6month": {
-        "price": "$39/6 months",
-        "duration_months": 6,
-        "env_key": "DODO_6MONTH_PRODUCT_ID"  # You'll need to add this to .env
-    },
-    "annual": {
-        "price": "$69/year",
-        "duration_months": 12,
-        "env_key": "DODO_ANNUAL_PRODUCT_ID"  # You'll need to add this to .env
+        "env_key": "DODO_MONTHLY_PRODUCT_ID"
     }
 }
 
@@ -94,31 +84,13 @@ async def get_pricing_plans():
         "plans": [
             {
                 "id": "monthly",
-                "name": "Monthly",
-                "price": "$9",
-                "billing": "per month",
+                "name": "One-Month Access",
+                "price": "$19",
+                "billing": "one-time",
                 "duration": "1 month",
                 "savings": None,
-                "description": "Perfect for trying out"
-            },
-            {
-                "id": "6month",
-                "name": "6 Months", 
-                "price": "$39",
-                "billing": "every 6 months",
-                "duration": "6 months",
-                "savings": "Save 28%",
-                "description": "Great for growing businesses"
-            },
-            {
-                "id": "annual",
-                "name": "Annual",
-                "price": "$69", 
-                "billing": "per year",
-                "duration": "12 months",
-                "savings": "Save 36%",
                 "popular": True,
-                "description": "Best value for serious growth"
+                "description": "Full access for 30 days"
             }
         ],
         "note": "All plans include full access to Reddit monitoring and AI-powered commenting"
